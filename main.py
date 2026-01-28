@@ -1,13 +1,17 @@
 import os
 import json
 import copy
+import asyncio
 import psycopg2
+from dotenv import load_dotenv
+
+load_dotenv()
 from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
-from openai import AzureOpenAI
+from openai import AzureOpenAI, AsyncAzureOpenAI
 
 app = FastAPI(title="Annual Planning API", version="0.1.0")
 
@@ -32,9 +36,20 @@ ai_client = AzureOpenAI(
     api_key=AZURE_OPENAI_API_KEY
 )
 
+async_ai_client = AsyncAzureOpenAI(
+    api_version="2024-02-15-preview",
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    api_key=AZURE_OPENAI_API_KEY
+)
+
 
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+
+class MethodologicalStrategies(BaseModel):
+    type: str  # proyecto, taller_laboratorio, ateneo_debate
+    context: str
 
 
 class CoordinationDocumentCreate(BaseModel):
@@ -42,7 +57,9 @@ class CoordinationDocumentCreate(BaseModel):
     area_id: int
     start_date: str
     end_date: str
-    methodological_strategies: Optional[str] = None
+    problem_edge: Optional[str] = None
+    methodological_strategies: Optional[dict] = None  # {type, context}
+    eval_criteria: Optional[str] = None
     subjects_data: Optional[dict] = None
     nucleus_ids: List[int] = []
     category_ids: List[int] = []
@@ -50,7 +67,9 @@ class CoordinationDocumentCreate(BaseModel):
 
 class CoordinationDocumentUpdate(BaseModel):
     name: Optional[str] = None
-    methodological_strategies: Optional[str] = None
+    problem_edge: Optional[str] = None
+    methodological_strategies: Optional[dict] = None  # {type, context}
+    eval_criteria: Optional[str] = None
     subjects_data: Optional[dict] = None
     status: Optional[str] = None
 
@@ -79,6 +98,10 @@ class TeacherLessonPlanCreate(BaseModel):
     didactic_strategies: Optional[str] = None
     class_format: Optional[str] = None
     moments: Optional[dict] = None
+    custom_instruction: Optional[str] = None
+    resources_mode: Optional[str] = 'global'
+    global_font_id: Optional[int] = None
+    moment_font_ids: Optional[dict] = None
 
 
 class TeacherLessonPlanUpdate(BaseModel):
@@ -90,6 +113,10 @@ class TeacherLessonPlanUpdate(BaseModel):
     class_format: Optional[str] = None
     moments: Optional[dict] = None
     status: Optional[str] = None
+    custom_instruction: Optional[str] = None
+    resources_mode: Optional[str] = None
+    global_font_id: Optional[int] = None
+    moment_font_ids: Optional[dict] = None
 
 
 # Response Models
@@ -107,6 +134,7 @@ class UserResponse(BaseModel):
     id: int
     email: str
     name: str
+    avatar_url: Optional[str] = None
     created_at: datetime
 
 class AreaResponse(BaseModel):
@@ -178,6 +206,35 @@ class ActivityResponse(BaseModel):
     id: int
     name: str
     description: Optional[str]
+    moment_type: Optional[str] = None
+    created_at: datetime
+
+
+class ActivitiesByMomentResponse(BaseModel):
+    apertura: List[ActivityResponse]
+    desarrollo: List[ActivityResponse]
+    cierre: List[ActivityResponse]
+
+
+class ActivityRecommendationRequest(BaseModel):
+    objective: str
+    category_ids: List[int]
+
+
+class ActivityRecommendationResponse(BaseModel):
+    apertura_recommended_id: int
+    desarrollo_recommended_ids: List[int]
+    cierre_recommended_id: int
+
+class FontResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    file_url: str
+    file_type: str
+    thumbnail_url: Optional[str]
+    area_id: Optional[int]
+    is_validated: bool
     created_at: datetime
 
 class CoordinationDocumentResponse(BaseModel):
@@ -187,7 +244,9 @@ class CoordinationDocumentResponse(BaseModel):
     start_date: date_type
     end_date: date_type
     status: str
-    methodological_strategies: Optional[str]
+    problem_edge: Optional[str] = None
+    methodological_strategies: Optional[dict] = None  # {type, context}
+    eval_criteria: Optional[str] = None
     subjects_data: Optional[dict]
     nucleus_ids: List[int]
     category_ids: List[int]
@@ -222,6 +281,10 @@ class TeacherLessonPlanResponse(BaseModel):
     is_own_plan: Optional[bool] = None
     created_by_teacher: Optional[str] = None
     created_by_subject: Optional[str] = None
+    custom_instruction: Optional[str] = None
+    resources_mode: Optional[str] = None
+    global_font_id: Optional[int] = None
+    moment_font_ids: Optional[dict] = None
 
 class TeacherLessonPlanDetailResponse(TeacherLessonPlanResponse):
     moment_types: List[MomentTypeResponse] = []
@@ -238,6 +301,75 @@ class SharedClassesResponse(BaseModel):
     course_id: int
     area_id: int
     shared_classes: List[SharedClassSlot]
+
+
+# Resource Models
+class ResourceCreate(BaseModel):
+    title: str
+    resource_type: str  # 'lecture_guide' | 'course_sheet'
+    user_id: int
+
+
+class ResourceUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+
+class ResourceResponse(BaseModel):
+    id: int
+    title: str
+    resource_type: str
+    content: Optional[str]
+    user_id: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+RESOURCE_TEMPLATES = {
+    'lecture_guide': """Guía de lectura – Ciencias Sociales (2° año)
+
+Tema: Cambios en la forma de vida y en la organización de las sociedades
+
+1. Según los textos, ¿qué es la Revolución Neolítica y por qué fue un momento importante en la historia de la humanidad?
+Respondé con tus propias palabras.
+
+2. ¿Cómo vivían los grupos humanos antes de la agricultura y cómo cambió su vida cuando comenzaron a cultivar plantas y criar animales?
+Nombrá al menos dos cambios.
+
+3. Los textos explican que la vida de los cazadores-recolectores no era necesariamente mala. ¿Qué aspectos positivos tenía esa forma de vida?
+
+4. ¿Qué razones mencionan los autores para explicar por qué las personas empezaron a practicar la agricultura?
+Explicá brevemente cada una.
+
+5. ¿Qué significa que las sociedades se hayan vuelto sedentarias? ¿Qué cambios trajo el sedentarismo en la organización social?
+
+6. Explicá qué es un excedente de producción y por qué fue tan importante en las sociedades agrícolas.
+
+7. Según los textos, ¿cómo influyó la aparición del excedente en el surgimiento de diferencias sociales y desigualdades?
+
+8. Uno de los textos propone pensar la economía de otra manera, relacionada con el cuidado de la vida y la naturaleza. ¿Qué ideas nuevas aparecen sobre el uso de la tierra y los recursos?
+
+9. Compará la forma en que las sociedades antiguas y las sociedades actuales se relacionan con la naturaleza. ¿Qué diferencias y similitudes encontrás?
+
+10. Después de leer los textos, ¿pensás que todos los cambios históricos significaron mejoras para todas las personas? ¿Por qué?
+Fundamentá tu respuesta usando ideas de las lecturas.
+""",
+    'course_sheet': """La Revolución Industrial Inglesa
+
+La Revolución Industrial Inglesa es un proceso económico, cultural y social que se llevó a cabo en el territorio que hoy conocemos como Inglaterra en el período que abarca el final del Siglo XVIII y principios del Siglo XIX. Es un período de fuertes transformaciones en la forma de producción económica, cultural y, por ende, en la forma de vivir de los sujetos de esa época. El impacto de este proceso sociohistórico aceleró cambios fundamentales en la economía y en los modos de vida del mundo occidental. A partir de la implementación de diversas innovaciones tecnológicas que se aplicaban en la forma de organización de los talleres manufactureros, se modifica radicalmente la actividad productiva de las trabajadoras y los trabajadores en las nuevas industrias, así como también se introducen cambios en la organización de los territorios y la forma de vivir de la gente.
+
+Esto significa que también los cuerpos sufren una modificación sustancial. A partir de la industrialización, el cuerpo comienza a ser visto y tratado como una máquina de trabajo que convive a la par de la máquina de vapor utilizada en distintas industrias.
+
+La migración de la población desde el campo hacia las grandes ciudades, la expropiación de las tierras, implica un cambio de concepción en la relación que los campesinos y las campesinas tenían en y con la naturaleza. Los procesos de explotación, como por ejemplo la mina de carbón, convierten a la naturaleza -y a los cuerpos que la trabajan- en una mercancía más del sistema capitalista. De esta concepción se desprende la necesidad de disciplinar los cuerpos de los hombres, las mujeres y los niños. Junto con la invención de la fábrica, conviven otras instituciones como las escuelas, los orfanatos, los hospitales, las cárceles, cuyo objetivo es controlar el tiempo y la vida de las personas para poder aumentar las fuerzas de trabajo del cuerpo y transformarlo en una máquina productiva que aporte de manera útil al sistema económico. Al mismo tiempo, se pretendía disminuir la desobediencia de los cuerpos. De esta manera, se instaura una vigilancia, un control, un castigo, normalizadores de los cuerpos.
+
+Para esto, fue necesario el desarrollo de distintos mecanismos de disciplinamiento que permitan un orden social, un comportamiento de los cuerpos, específico. Estas formas de control del tiempo y de la vida, si bien surgieron hace varios siglos atrás, conservan su vigencia en la época actual. En primer lugar, podemos pensar el modelo del panóptico, diseñada por Jeremy Bentham. Esta forma implica el uso de una gran visión que organiza el espacio productivo de modo tal que se centra en la posibilidad de que cientos de cuerpos, gestos, movimientos, etc. sean supervisados por una "gran visión", la del capataz, el supervisor, etc. Es decir, los cuerpos son sometidos a un control minucioso y constante lo que tiene por resultado la creación de sujetos que -al no saber en qué momento están siendo o no observados- son obedientes.
+
+En segundo lugar, podemos pensar el modelo maquínico de disciplinamiento. A partir de la introducción de la máquina en las fábricas, es decir, a partir de la introducción de las distintas innovaciones tecnológicas, los obreros y las obreras se ven obligados a adecuar sus gestos y movimientos -sus cuerpos- al ritmo que impone la máquina. Se crea una disciplina intensa, regular, alejada del tiempo e impersonal.
+
+A partir del uso de estas nuevas lógicas, de estas nuevas formas de trabajar, los cuerpos y sus tiempos quedan atrapados dentro de poderes sutiles que les imponen coacciones, obligaciones, controles. Es a partir del ejercicio del poder disciplinar que se construye una nueva forma de ser y estar en el mundo, de vincularse con la naturaleza y los seres humanos que nos rodean. Se crea el obrero.
+"""
+}
 
 class SharedClassNumbersResponse(BaseModel):
     shared_class_numbers: List[int]
@@ -275,23 +407,32 @@ class GenerateMomentResponse(BaseModel):
 
 
 # AI Helper Functions
-def generate_methodological_strategies(area_name: str, subjects: list, categories: list, nuclei: list) -> str:
+
+# Strategy types with descriptions for AI prompt
+STRATEGY_TYPES = {
+    "proyecto": "Construimos como area un resultado entregable final, trabajandose de manera individual en cada disciplina y EPAs para lograr los hitos intermedios",
+    "taller_laboratorio": "Actividad/es que combina/n los saberes teoricos desarrollados en cada disciplina-EPAs con saberes practicos que privilegien la dimension experiencial",
+    "ateneo_debate": "Actividad que propone la construccion de posiciones, criterios e ideas a partir del desarrollo del pensamiento critico y reflexivo"
+}
+
+
+def generate_problem_edge(area_name: str, subjects: list, categories: list, nuclei: list) -> str:
+    """Generate the problem edge (problem statement) for a coordination document."""
     subject_names = [s["name"] for s in subjects]
     category_names = [c["name"] for c in categories]
     nucleus_names = [n["name"] for n in nuclei]
 
-    prompt = f"""Eres un experto en planificación educativa. Genera una estrategia metodológica para el área de {area_name}.
+    prompt = f"""Eres un experto en planificación educativa. Genera un planteamiento de problema para el área de {area_name}.
 
 Materias involucradas: {', '.join(subject_names)}
 Núcleos problemáticos: {', '.join(nucleus_names)}
 Categorías/conceptos a enseñar: {', '.join(category_names)}
 
-Escribe una estrategia metodológica de 2-3 párrafos que explique:
-1. El enfoque pedagógico general para integrar estas materias
-2. Las metodologías de enseñanza recomendadas
-3. Cómo se relacionan los conceptos entre las diferentes materias
+Debes responder con:
+1. Una pregunta breve (máximo 20 palabras) que funcione como eje problemático
+2. Una oración que comience con "A través de este eje los alumnos..." explicando qué lograrán
 
-Responde solo con la estrategia, sin títulos ni encabezados."""
+Responde solo con la pregunta y la oración, sin títulos ni encabezados."""
 
     try:
         response = ai_client.chat.completions.create(
@@ -300,10 +441,208 @@ Responde solo con la estrategia, sin títulos ni encabezados."""
             max_completion_tokens=16000
         )
         content = response.choices[0].message.content
-        print(f"[AI] Generated strategy: {content[:100] if content else 'EMPTY'}...")
+        print(f"[AI] Generated problem_edge: {content[:100] if content else 'EMPTY'}...")
         return content or ""
     except Exception as e:
+        print(f"[AI] Error generating problem_edge: {type(e).__name__}: {e}")
+        raise
+
+
+def generate_methodological_strategies(area_name: str, subjects: list, categories: list, nuclei: list) -> dict:
+    """Generate methodological strategies with type and context."""
+    subject_names = [s["name"] for s in subjects]
+    category_names = [c["name"] for c in categories]
+    nucleus_names = [n["name"] for n in nuclei]
+
+    strategy_types_desc = "\n".join([f"- {k}: {v}" for k, v in STRATEGY_TYPES.items()])
+
+    prompt = f"""Eres un experto en planificación educativa. Genera una estrategia metodológica para el área de {area_name}.
+
+Materias involucradas: {', '.join(subject_names)}
+Núcleos problemáticos: {', '.join(nucleus_names)}
+Categorías/conceptos a enseñar: {', '.join(category_names)}
+
+Tipos de estrategia disponibles:
+{strategy_types_desc}
+
+Debes:
+1. Elegir el tipo de estrategia más apropiado según el contexto (proyecto, taller_laboratorio, o ateneo_debate)
+2. Escribir UN solo párrafo corto y enfocado explicando cómo se implementará
+
+Responde en formato JSON con esta estructura exacta:
+{{"type": "proyecto|taller_laboratorio|ateneo_debate", "context": "Párrafo breve..."}}
+
+Solo responde con el JSON, sin explicaciones adicionales."""
+
+    try:
+        response = ai_client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=16000
+        )
+        content = response.choices[0].message.content
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        result = json.loads(content)
+        # Validate type
+        if result.get("type") not in STRATEGY_TYPES:
+            result["type"] = "proyecto"
+        print(f"[AI] Generated strategy: type={result.get('type')}, context={result.get('context', '')[:100]}...")
+        return result
+    except Exception as e:
         print(f"[AI] Error generating strategy: {type(e).__name__}: {e}")
+        # Fallback
+        return {"type": "proyecto", "context": ""}
+
+
+def generate_eval_criteria(area_name: str, subjects: list, categories: list, nuclei: list) -> str:
+    """Generate evaluation criteria for a coordination document."""
+    subject_names = [s["name"] for s in subjects]
+    category_names = [c["name"] for c in categories]
+    nucleus_names = [n["name"] for n in nuclei]
+
+    prompt = f"""Eres un experto en planificación educativa. Genera criterios de evaluación para el área de {area_name}.
+
+Materias involucradas: {', '.join(subject_names)}
+Núcleos problemáticos: {', '.join(nucleus_names)}
+Categorías/conceptos a evaluar: {', '.join(category_names)}
+
+Requisitos:
+1. Máximo 5 criterios
+2. Cada criterio debe tener máximo 40 caracteres
+3. Formato simple: solo el criterio, sin escalas ni notas numéricas
+
+Responde solo con bullets (guiones), sin títulos ni encabezados."""
+
+    try:
+        response = ai_client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=16000
+        )
+        content = response.choices[0].message.content
+        print(f"[AI] Generated eval_criteria: {content[:100] if content else 'EMPTY'}...")
+        return content or ""
+    except Exception as e:
+        print(f"[AI] Error generating eval_criteria: {type(e).__name__}: {e}")
+        raise
+
+
+# Async versions of generate functions for parallel execution
+
+async def async_generate_problem_edge(area_name: str, subjects: list, categories: list, nuclei: list) -> str:
+    """Async version: Generate the problem edge for a coordination document."""
+    subject_names = [s["name"] for s in subjects]
+    category_names = [c["name"] for c in categories]
+    nucleus_names = [n["name"] for n in nuclei]
+
+    prompt = f"""Eres un experto en planificación educativa. Genera un planteamiento de problema para el área de {area_name}.
+
+Materias involucradas: {', '.join(subject_names)}
+Núcleos problemáticos: {', '.join(nucleus_names)}
+Categorías/conceptos a enseñar: {', '.join(category_names)}
+
+Debes responder con:
+1. Una pregunta breve (máximo 20 palabras) que funcione como eje problemático
+2. Una oración que comience con "A través de este eje los alumnos..." explicando qué lograrán
+
+Responde solo con la pregunta y la oración, sin títulos ni encabezados."""
+
+    try:
+        response = await async_ai_client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=16000
+        )
+        content = response.choices[0].message.content
+        print(f"[AI] Generated problem_edge: {content[:100] if content else 'EMPTY'}...")
+        return content or ""
+    except Exception as e:
+        print(f"[AI] Error generating problem_edge: {type(e).__name__}: {e}")
+        raise
+
+
+async def async_generate_methodological_strategies(area_name: str, subjects: list, categories: list, nuclei: list) -> dict:
+    """Async version: Generate methodological strategies with type and context."""
+    subject_names = [s["name"] for s in subjects]
+    category_names = [c["name"] for c in categories]
+    nucleus_names = [n["name"] for n in nuclei]
+
+    strategy_types_desc = "\n".join([f"- {k}: {v}" for k, v in STRATEGY_TYPES.items()])
+
+    prompt = f"""Eres un experto en planificación educativa. Genera una estrategia metodológica para el área de {area_name}.
+
+Materias involucradas: {', '.join(subject_names)}
+Núcleos problemáticos: {', '.join(nucleus_names)}
+Categorías/conceptos a enseñar: {', '.join(category_names)}
+
+Tipos de estrategia disponibles:
+{strategy_types_desc}
+
+Debes:
+1. Elegir el tipo de estrategia más apropiado según el contexto (proyecto, taller_laboratorio, o ateneo_debate)
+2. Escribir UN solo párrafo corto y enfocado explicando cómo se implementará
+
+Responde en formato JSON con esta estructura exacta:
+{{"type": "proyecto|taller_laboratorio|ateneo_debate", "context": "Párrafo breve..."}}
+
+Solo responde con el JSON, sin explicaciones adicionales."""
+
+    try:
+        response = await async_ai_client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=16000
+        )
+        content = response.choices[0].message.content
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        result = json.loads(content)
+        if result.get("type") not in STRATEGY_TYPES:
+            result["type"] = "proyecto"
+        print(f"[AI] Generated strategy: type={result.get('type')}, context={result.get('context', '')[:100]}...")
+        return result
+    except Exception as e:
+        print(f"[AI] Error generating strategy: {type(e).__name__}: {e}")
+        return {"type": "proyecto", "context": ""}
+
+
+async def async_generate_eval_criteria(area_name: str, subjects: list, categories: list, nuclei: list) -> str:
+    """Async version: Generate evaluation criteria for a coordination document."""
+    subject_names = [s["name"] for s in subjects]
+    category_names = [c["name"] for c in categories]
+    nucleus_names = [n["name"] for n in nuclei]
+
+    prompt = f"""Eres un experto en planificación educativa. Genera criterios de evaluación para el área de {area_name}.
+
+Materias involucradas: {', '.join(subject_names)}
+Núcleos problemáticos: {', '.join(nucleus_names)}
+Categorías/conceptos a evaluar: {', '.join(category_names)}
+
+Requisitos:
+1. Máximo 5 criterios
+2. Cada criterio debe tener máximo 40 caracteres
+3. Formato simple: solo el criterio, sin escalas ni notas numéricas
+
+Responde solo con bullets (guiones), sin títulos ni encabezados."""
+
+    try:
+        response = await async_ai_client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=16000
+        )
+        content = response.choices[0].message.content
+        print(f"[AI] Generated eval_criteria: {content[:100] if content else 'EMPTY'}...")
+        return content or ""
+    except Exception as e:
+        print(f"[AI] Error generating eval_criteria: {type(e).__name__}: {e}")
         raise
 
 
@@ -325,10 +664,11 @@ Categorías/conceptos a cubrir: {', '.join(subject_category_names)}
 
 Para cada clase, genera:
 - Un título breve y descriptivo
+- Un objetivo de aprendizaje específico para esa clase
 - Los IDs de categorías que se trabajan en esa clase (de la lista: {subject_category_ids})
 
 Responde en formato JSON como un array de objetos con esta estructura:
-[{{"class_number": 1, "title": "Título de la clase", "category_ids": [1, 2]}}]
+[{{"class_number": 1, "title": "Título de la clase", "objective": "Objetivo de aprendizaje de la clase", "category_ids": [1, 2]}}]
 
 Solo responde con el JSON, sin explicaciones adicionales."""
 
@@ -357,6 +697,7 @@ Solo responde con el JSON, sin explicaciones adicionales."""
                 class_plan.append({
                     "class_number": i + 1,
                     "title": f"Clase {i + 1}",
+                    "objective": "",
                     "category_ids": class_cats
                 })
 
@@ -442,17 +783,39 @@ CHAT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "update_methodological_strategy",
-            "description": "REEMPLAZA COMPLETAMENTE la estrategia metodológica del documento. Solo usar si el usuario quiere cambiar TODO el texto.",
+            "name": "update_problem_edge",
+            "description": "Actualiza el planteamiento del problema del documento",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "new_strategy": {
+                    "new_problem_edge": {
                         "type": "string",
-                        "description": "La nueva estrategia metodológica completa"
+                        "description": "El nuevo planteamiento del problema"
                     }
                 },
-                "required": ["new_strategy"]
+                "required": ["new_problem_edge"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_methodological_strategy",
+            "description": "REEMPLAZA COMPLETAMENTE la estrategia metodológica del documento. Puede cambiar el tipo (proyecto, taller_laboratorio, ateneo_debate) y/o el contexto.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "strategy_type": {
+                        "type": "string",
+                        "enum": ["proyecto", "taller_laboratorio", "ateneo_debate"],
+                        "description": "El tipo de estrategia: proyecto, taller_laboratorio, o ateneo_debate"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "El contexto/descripción de la estrategia metodológica"
+                    }
+                },
+                "required": ["strategy_type", "context"]
             }
         }
     },
@@ -460,16 +823,33 @@ CHAT_TOOLS = [
         "type": "function",
         "function": {
             "name": "append_to_methodological_strategy",
-            "description": "AGREGA texto al final de la estrategia metodológica existente. Usar cuando el usuario quiere añadir algo sin borrar lo existente.",
+            "description": "AGREGA texto al final del contexto de la estrategia metodológica existente. Usar cuando el usuario quiere añadir algo sin borrar lo existente.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "text_to_append": {
                         "type": "string",
-                        "description": "El texto a agregar al final de la estrategia existente"
+                        "description": "El texto a agregar al final del contexto de la estrategia existente"
                     }
                 },
                 "required": ["text_to_append"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_eval_criteria",
+            "description": "Actualiza los criterios de evaluación del documento",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "new_eval_criteria": {
+                        "type": "string",
+                        "description": "Los nuevos criterios de evaluación"
+                    }
+                },
+                "required": ["new_eval_criteria"]
             }
         }
     },
@@ -495,6 +875,31 @@ CHAT_TOOLS = [
                     }
                 },
                 "required": ["subject_id", "class_number", "new_title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_class_objective",
+            "description": "Actualiza el objetivo de una clase específica de una materia",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subject_id": {
+                        "type": "integer",
+                        "description": "ID de la materia"
+                    },
+                    "class_number": {
+                        "type": "integer",
+                        "description": "Número de la clase (1-indexed)"
+                    },
+                    "new_objective": {
+                        "type": "string",
+                        "description": "El nuevo objetivo para la clase"
+                    }
+                },
+                "required": ["subject_id", "class_number", "new_objective"]
             }
         }
     },
@@ -532,38 +937,72 @@ PROPOSAL_CHAT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "set_agreement_value",
-            "description": "Establece el valor/decisión para un acuerdo. Usar cuando el docente ha tomado una decisión clara.",
+            "name": "complete_agreement",
+            "description": "Registra la decisión y marca el acuerdo como completado. Usar cuando el docente expresa una decisión clara o confirma su elección.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "value": {
+                    "decision": {
                         "type": "string",
-                        "description": "El valor o decisión tomada por el docente"
+                        "description": "La decisión tomada (ej: 'Aparato respiratorio', 'Presentación a familias')"
                     }
                 },
-                "required": ["value"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mark_agreement_complete",
-            "description": "Marca el acuerdo como completado. Solo usar cuando el docente ha confirmado su decisión final.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": {
-                        "type": "string",
-                        "description": "Resumen breve de la decisión tomada"
-                    }
-                },
-                "required": ["summary"]
+                "required": ["decision"]
             }
         }
     }
 ]
+
+
+def format_alizia_context(context: dict) -> str:
+    """Convert alizia_context dict to formatted text for the system prompt."""
+    if not context:
+        return ""
+
+    sections = []
+
+    # Valid options
+    if context.get("valid_options"):
+        options_text = "\n".join([
+            f"  - {opt.get('value', '')}" + (f" ({opt.get('element', '')})" if opt.get('element') else "") + (f": {opt.get('notes', '')}" if opt.get('notes') else "")
+            for opt in context["valid_options"]
+        ])
+        sections.append(f"OPCIONES VÁLIDAS:\n{options_text}")
+
+    # Knowledge/background
+    if context.get("knowledge"):
+        knowledge_text = "\n".join([f"  - {k}" for k in context["knowledge"]])
+        sections.append(f"CONOCIMIENTO DE CONTEXTO:\n{knowledge_text}")
+
+    # Guiding questions
+    if context.get("guiding_questions"):
+        questions_text = "\n".join([f"  - {q}" for q in context["guiding_questions"]])
+        sections.append(f"PREGUNTAS ORIENTADORAS (usa estas para guiar la conversación):\n{questions_text}")
+
+    # Warning signals
+    if context.get("warning_signals"):
+        warnings_text = "\n".join([
+            f"  - Si {w.get('trigger', '')}: {w.get('response', '')}"
+            for w in context["warning_signals"]
+        ])
+        sections.append(f"SEÑALES DE ALERTA:\n{warnings_text}")
+
+    # Stance
+    if context.get("stance"):
+        stance_text = context["stance"]
+        if context.get("stance_examples"):
+            examples = "\n".join([f"    Ejemplo: \"{ex}\"" for ex in context["stance_examples"]])
+            stance_text += f"\n{examples}"
+        sections.append(f"POSTURA A ADOPTAR: {stance_text}")
+
+    # Acceptance criteria
+    if context.get("acceptance_criteria"):
+        sections.append(f"CRITERIO DE ACEPTACIÓN (cuándo marcar como completado):\n  {context['acceptance_criteria']}")
+
+    if not sections:
+        return ""
+
+    return "\n\n--- CONTEXTO ESPECÍFICO PARA ESTA DECISIÓN ---\n" + "\n\n".join(sections) + "\n--- FIN CONTEXTO ESPECÍFICO ---\n"
 
 
 def get_proposal_chat_system_prompt(
@@ -571,11 +1010,20 @@ def get_proposal_chat_system_prompt(
     agreement_description: str,
     responsible_type: str,
     proposal_name: str,
-    existing_value: str = None
+    existing_value: str = None,
+    alizia_context: dict = None,
+    teacher_name: str = None,
+    subject_name: str = None
 ) -> str:
     """Generate system prompt based on responsible type."""
 
-    base_context = f"""Eres Alizia, una Docente Referente (DR) de tecnología educativa que ayuda a docentes de aula (DA) a implementar proyectos de pensamiento computacional.
+    teacher_info = f"Estás hablando con {teacher_name}" if teacher_name else "Estás hablando con un docente"
+    if subject_name:
+        teacher_info += f" que está trabajando en la materia {subject_name}"
+
+    base_context = f"""Eres Alizia, una Docente Remota (DR) de tecnología educativa que ayuda a docentes de aula (DA) a implementar proyectos de pensamiento computacional.
+
+{teacher_info}.
 
 Proyecto actual: {proposal_name}
 Acuerdo en discusión: {agreement_title}
@@ -591,21 +1039,24 @@ TONO: Sugerente y orientador
 - El DA tiene la decisión final sobre este acuerdo
 - Tu rol es ofrecer sugerencias, hacer preguntas que ayuden a reflexionar, y validar las decisiones del DA
 - NO impongas tu criterio, pero sí puedes ofrecer alternativas o señalar consideraciones importantes
-- Cuando el DA exprese una decisión clara, usa set_agreement_value para registrarla
-- Cuando el DA confirme que está satisfecho con su decisión, usa mark_agreement_complete
+- Cuando el DA exprese una decisión clara, usa complete_agreement para registrarla y cerrar el acuerdo
+- AL USAR complete_agreement: SIEMPRE genera también un mensaje de texto validando la decisión del docente (ej: "Excelente decisión, queda registrado que...")
 """
     else:  # conjunto
         tone = """
 TONO: Firme y co-decisor
-- Este es un acuerdo CONJUNTO donde tú (Alizia/DR) participas activamente en la decisión
+- Este es un acuerdo CONJUNTO donde tú (Alizia, la Docente Remota) participas activamente en la decisión
 - Puedes y DEBES expresar tu opinión fundamentada
 - Puedes proponer alternativas y negociar hasta llegar a un acuerdo mutuo
 - No aceptes decisiones que consideres pedagógicamente inadecuadas sin discutirlas primero
-- Cuando lleguen a un acuerdo conjunto, usa set_agreement_value para registrarlo
-- Cuando ambos estén de acuerdo, usa mark_agreement_complete
+- Cuando lleguen a un acuerdo conjunto, usa complete_agreement para registrarlo y cerrar el acuerdo
+- AL USAR complete_agreement: SIEMPRE genera también un mensaje celebrando el acuerdo conjunto (ej: "¡Perfecto! Hemos acordado juntos que...")
 """
 
-    return base_context + tone + """
+    # Add contextual prompt if available
+    context_prompt = format_alizia_context(alizia_context) if alizia_context else ""
+
+    return base_context + tone + context_prompt + """
 
 IMPORTANTE:
 - Responde siempre en español, de manera cálida pero profesional
@@ -621,12 +1072,16 @@ def process_proposal_chat(
     responsible_type: str,
     proposal_name: str,
     history: list,
-    existing_value: str = None
+    existing_value: str = None,
+    alizia_context: dict = None,
+    teacher_name: str = None,
+    subject_name: str = None
 ) -> dict:
     """Process chat messages for proposal agreements."""
 
     system_prompt = get_proposal_chat_system_prompt(
-        agreement_title, agreement_description, responsible_type, proposal_name, existing_value
+        agreement_title, agreement_description, responsible_type, proposal_name, existing_value, alizia_context,
+        teacher_name, subject_name
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -656,15 +1111,11 @@ def process_proposal_chat(
             args = json.loads(tool_call.function.arguments)
             print(f"[ProposalChat] Function: {function_name}, Args: {args}")
 
-            if function_name == "set_agreement_value":
-                result["decision_value"] = args["value"]
-                if not result["response"]:
-                    result["response"] = f"He registrado tu decisión: {args['value']}"
-
-            elif function_name == "mark_agreement_complete":
+            if function_name == "complete_agreement":
+                result["decision_value"] = args["decision"]
                 result["agreement_completed"] = True
                 if not result["response"]:
-                    result["response"] = f"Excelente, hemos acordado: {args['summary']}. Este acuerdo queda completado."
+                    result["response"] = f"Perfecto, he registrado: {args['decision']}. ¡Acuerdo completado!"
 
     return result
 
@@ -828,18 +1279,42 @@ def process_chat_message(doc: dict, history: list, subjects: list, categories: l
     for sid, sdata in subjects_data.items():
         sname = subject_map.get(int(sid), f"Materia {sid}")
         class_plan = sdata.get("class_plan", [])
-        classes_info = [f"Clase {c['class_number']}: {c.get('title', 'Sin título')}" for c in class_plan[:5]]
+        classes_info = [f"Clase {c['class_number']}: {c.get('title', 'Sin título')} (obj: {c.get('objective', 'sin objetivo')[:50]}...)" for c in class_plan[:5]]
         subjects_info.append(f"- {sname} (ID: {sid}): {len(class_plan)} clases. Primeras: {', '.join(classes_info)}")
 
-    current_strategy = doc.get('methodological_strategies', '') or 'No generada aún'
+    # Handle methodological_strategies (now JSONB with type and context)
+    current_strategy = doc.get('methodological_strategies') or {}
+    if isinstance(current_strategy, str):
+        # Legacy string format
+        strategy_display = f"Contexto: {current_strategy}"
+    elif current_strategy:
+        strategy_type = current_strategy.get('type', 'proyecto')
+        strategy_context = current_strategy.get('context', '')
+        strategy_display = f"Tipo: {strategy_type}\nContexto: {strategy_context}"
+    else:
+        strategy_display = 'No generada aún'
+
+    current_problem_edge = doc.get('problem_edge', '') or 'No generado aún'
+    current_eval_criteria = doc.get('eval_criteria', '') or 'No generados aún'
 
     system_prompt = f"""Eres Alizia, una asistente de IA para planificación educativa. Ayudas a modificar documentos de coordinación.
 
 Documento actual:
 - Título: {doc['name']}
-- Estrategia metodológica COMPLETA (NO la modifiques a menos que te lo pidan explícitamente):
+
+- Planteamiento del problema:
 \"\"\"
-{current_strategy}
+{current_problem_edge}
+\"\"\"
+
+- Estrategia metodológica (NO la modifiques a menos que te lo pidan explícitamente):
+\"\"\"
+{strategy_display}
+\"\"\"
+
+- Criterios de evaluación:
+\"\"\"
+{current_eval_criteria}
 \"\"\"
 
 Materias y sus clases (USA ESTOS IDs EXACTOS):
@@ -850,8 +1325,12 @@ Categorías disponibles:
 
 IMPORTANTE:
 - Cuando modifiques una clase, usa el ID de la materia que aparece entre paréntesis arriba.
+- Para modificar el planteamiento del problema, usa update_problem_edge.
 - Si el usuario pide AGREGAR algo al final de la estrategia, usa append_to_methodological_strategy (NO reemplaces todo).
-- Si el usuario pide REEMPLAZAR o CAMBIAR completamente la estrategia, usa update_methodological_strategy.
+- Si el usuario pide REEMPLAZAR o CAMBIAR completamente la estrategia (tipo o contexto), usa update_methodological_strategy.
+  - Tipos de estrategia disponibles: proyecto, taller_laboratorio, ateneo_debate
+- Para modificar los criterios de evaluación, usa update_eval_criteria.
+- Para modificar el objetivo de una clase, usa update_class_objective.
 - Cuando el usuario pida modificar algo, usa las funciones disponibles para hacer los cambios.
 - Si no hay una función para lo que pide, explica qué puedes hacer.
 Responde siempre en español de manera amigable y concisa."""
@@ -885,15 +1364,33 @@ Responde siempre en español de manera amigable y concisa."""
                 updates["name"] = args["new_title"]
                 changes_made.append(f"título cambiado a '{args['new_title']}'")
 
+            elif function_name == "update_problem_edge":
+                updates["problem_edge"] = args["new_problem_edge"]
+                changes_made.append("planteamiento del problema actualizado")
+
             elif function_name == "update_methodological_strategy":
-                updates["methodological_strategies"] = args["new_strategy"]
-                changes_made.append("estrategia metodológica actualizada")
+                updates["methodological_strategies"] = {
+                    "type": args["strategy_type"],
+                    "context": args["context"]
+                }
+                changes_made.append(f"estrategia metodológica actualizada (tipo: {args['strategy_type']})")
 
             elif function_name == "append_to_methodological_strategy":
-                current = doc.get('methodological_strategies', '') or ''
+                current_strategy = doc.get('methodological_strategies') or {}
+                if isinstance(current_strategy, str):
+                    # Handle legacy string format
+                    current_strategy = {"type": "proyecto", "context": current_strategy}
+                current_context = current_strategy.get('context', '') or ''
                 new_text = args["text_to_append"]
-                updates["methodological_strategies"] = current.rstrip() + " " + new_text
+                updates["methodological_strategies"] = {
+                    "type": current_strategy.get("type", "proyecto"),
+                    "context": current_context.rstrip() + " " + new_text
+                }
                 changes_made.append("texto agregado al final de la estrategia metodológica")
+
+            elif function_name == "update_eval_criteria":
+                updates["eval_criteria"] = args["new_eval_criteria"]
+                changes_made.append("criterios de evaluación actualizados")
 
             elif function_name == "update_class_title":
                 sid = str(args["subject_id"])
@@ -914,6 +1411,29 @@ Responde siempre en español de manera amigable y concisa."""
                             updates["subjects_data"] = subjects_data
                             subject_name = subject_map.get(int(key), f"Materia {key}")
                             changes_made.append(f"título de clase {class_num} de {subject_name} cambiado a '{new_title}'")
+                            break
+
+                if not found:
+                    print(f"[Chat] Could not find subject {sid} or class {class_num}. Available keys: {list(subjects_data.keys())}")
+
+            elif function_name == "update_class_objective":
+                sid = str(args["subject_id"])
+                class_num = args["class_number"]
+                new_objective = args["new_objective"]
+                found = False
+
+                for key in subjects_data.keys():
+                    if str(key) == sid:
+                        if "class_plan" in subjects_data[key]:
+                            for c in subjects_data[key]["class_plan"]:
+                                if c["class_number"] == class_num:
+                                    c["objective"] = new_objective
+                                    found = True
+                                    break
+                        if found:
+                            updates["subjects_data"] = subjects_data
+                            subject_name = subject_map.get(int(key), f"Materia {key}")
+                            changes_made.append(f"objetivo de clase {class_num} de {subject_name} actualizado")
                             break
 
                 if not found:
@@ -1349,9 +1869,17 @@ async def update_coordination_document(doc_id: int, updates: CoordinationDocumen
                 update_fields.append("name = %s")
                 values.append(updates.name)
 
+            if updates.problem_edge is not None:
+                update_fields.append("problem_edge = %s")
+                values.append(updates.problem_edge)
+
             if updates.methodological_strategies is not None:
                 update_fields.append("methodological_strategies = %s")
-                values.append(updates.methodological_strategies)
+                values.append(json.dumps(updates.methodological_strategies))
+
+            if updates.eval_criteria is not None:
+                update_fields.append("eval_criteria = %s")
+                values.append(updates.eval_criteria)
 
             if updates.subjects_data is not None:
                 update_fields.append("subjects_data = %s")
@@ -1413,16 +1941,19 @@ async def generate_document_content(doc_id: int, request: GenerateRequest):
                 nuclei = cur.fetchall()
 
             updates = {}
+            area_name = area["name"] if area else "General"
 
             if request.generate_strategy:
                 try:
-                    strategy = generate_methodological_strategies(
-                        area["name"] if area else "General",
-                        subjects,
-                        categories,
-                        nuclei
+                    # Run 3 AI calls in parallel using async versions
+                    problem_edge, strategy, eval_criteria = await asyncio.gather(
+                        async_generate_problem_edge(area_name, subjects, categories, nuclei),
+                        async_generate_methodological_strategies(area_name, subjects, categories, nuclei),
+                        async_generate_eval_criteria(area_name, subjects, categories, nuclei)
                     )
+                    updates["problem_edge"] = problem_edge
                     updates["methodological_strategies"] = strategy
+                    updates["eval_criteria"] = eval_criteria
                 except Exception as e:
                     raise HTTPException(
                         status_code=503,
@@ -1442,9 +1973,17 @@ async def generate_document_content(doc_id: int, request: GenerateRequest):
                 update_fields = []
                 values = []
 
+                if "problem_edge" in updates:
+                    update_fields.append("problem_edge = %s")
+                    values.append(updates["problem_edge"])
+
                 if "methodological_strategies" in updates:
                     update_fields.append("methodological_strategies = %s")
-                    values.append(updates["methodological_strategies"])
+                    values.append(json.dumps(updates["methodological_strategies"]))
+
+                if "eval_criteria" in updates:
+                    update_fields.append("eval_criteria = %s")
+                    values.append(updates["eval_criteria"])
 
                 if "subjects_data" in updates:
                     update_fields.append("subjects_data = %s")
@@ -1490,9 +2029,17 @@ async def chat_with_document(doc_id: int, chat: ChatMessage):
                     update_fields.append("name = %s")
                     values.append(result["updates"]["name"])
 
+                if "problem_edge" in result["updates"]:
+                    update_fields.append("problem_edge = %s")
+                    values.append(result["updates"]["problem_edge"])
+
                 if "methodological_strategies" in result["updates"]:
                     update_fields.append("methodological_strategies = %s")
-                    values.append(result["updates"]["methodological_strategies"])
+                    values.append(json.dumps(result["updates"]["methodological_strategies"]))
+
+                if "eval_criteria" in result["updates"]:
+                    update_fields.append("eval_criteria = %s")
+                    values.append(result["updates"]["eval_criteria"])
 
                 if "subjects_data" in result["updates"]:
                     update_fields.append("subjects_data = %s")
@@ -1540,8 +2087,8 @@ async def create_coordination_document(doc: CoordinationDocumentCreate):
             cur.execute(
                 """
                 INSERT INTO coordination_documents
-                (name, area_id, start_date, end_date, methodological_strategies, subjects_data, nucleus_ids, category_ids)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (name, area_id, start_date, end_date, problem_edge, methodological_strategies, eval_criteria, subjects_data, nucleus_ids, category_ids)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -1549,7 +2096,9 @@ async def create_coordination_document(doc: CoordinationDocumentCreate):
                     doc.area_id,
                     doc.start_date,
                     doc.end_date,
-                    doc.methodological_strategies,
+                    doc.problem_edge or '',
+                    json.dumps(doc.methodological_strategies) if doc.methodological_strategies else None,
+                    doc.eval_criteria or '',
                     json.dumps(doc.subjects_data) if doc.subjects_data else None,
                     doc.nucleus_ids,
                     doc.category_ids,
@@ -1569,12 +2118,155 @@ async def get_moment_types():
             return cur.fetchall()
 
 
-@app.get("/activities", response_model=List[ActivityResponse])
+@app.get("/activities", response_model=ActivitiesByMomentResponse)
 async def get_activities():
+    """Get all activities grouped by moment_type."""
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM activities ORDER BY id")
+            all_activities = cur.fetchall()
+
+            result = {
+                "apertura": [],
+                "desarrollo": [],
+                "cierre": []
+            }
+
+            for activity in all_activities:
+                moment_type = activity.get("moment_type")
+                if moment_type in result:
+                    result[moment_type].append(activity)
+
+            return result
+
+
+@app.post("/activities/recommend", response_model=ActivityRecommendationResponse)
+async def recommend_activities(request: ActivityRecommendationRequest):
+    """Use AI to recommend activities based on objective and categories."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # Get all activities grouped by moment
+            cur.execute("SELECT id, name, description, moment_type FROM activities ORDER BY id")
+            all_activities = cur.fetchall()
+
+            activities_by_moment = {"apertura": [], "desarrollo": [], "cierre": []}
+            for act in all_activities:
+                moment_type = act.get("moment_type")
+                if moment_type in activities_by_moment:
+                    activities_by_moment[moment_type].append(act)
+
+            # Get category names
+            category_names = []
+            if request.category_ids:
+                placeholders = ','.join(['%s'] * len(request.category_ids))
+                cur.execute(f"SELECT name FROM categories WHERE id IN ({placeholders})", tuple(request.category_ids))
+                category_names = [row["name"] for row in cur.fetchall()]
+
+            # Build prompt for AI
+            apertura_opts = "\n".join([f"- ID {a['id']}: {a['name']} - {a['description']}" for a in activities_by_moment["apertura"]])
+            desarrollo_opts = "\n".join([f"- ID {a['id']}: {a['name']} - {a['description']}" for a in activities_by_moment["desarrollo"]])
+            cierre_opts = "\n".join([f"- ID {a['id']}: {a['name']} - {a['description']}" for a in activities_by_moment["cierre"]])
+
+            prompt = f"""Eres un experto en planificación educativa. Basándote en el objetivo de la clase y las categorías a trabajar, recomienda las mejores actividades pedagógicas.
+
+OBJETIVO DE LA CLASE:
+{request.objective}
+
+CATEGORÍAS/CONCEPTOS A TRABAJAR:
+{', '.join(category_names) if category_names else 'No especificadas'}
+
+ACTIVIDADES DISPONIBLES POR MOMENTO:
+
+APERTURA (selecciona 1):
+{apertura_opts}
+
+DESARROLLO (selecciona hasta 3):
+{desarrollo_opts}
+
+CIERRE (selecciona 1):
+{cierre_opts}
+
+Responde SOLO con un JSON en este formato exacto:
+{{"apertura_recommended_id": <id>, "desarrollo_recommended_ids": [<id1>, <id2>, <id3>], "cierre_recommended_id": <id>}}
+
+Selecciona las actividades que mejor se adapten al objetivo y los conceptos a trabajar.
+Para desarrollo, selecciona exactamente 3 actividades complementarias.
+Solo responde con el JSON, sin explicaciones."""
+
+            try:
+                response = ai_client.chat.completions.create(
+                    model=AZURE_OPENAI_DEPLOYMENT,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_completion_tokens=500
+                )
+                content = response.choices[0].message.content.strip()
+
+                # Parse JSON from response
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                    content = content.strip()
+
+                recommendations = json.loads(content)
+
+                # Validate the response has valid IDs
+                apertura_ids = [a["id"] for a in activities_by_moment["apertura"]]
+                desarrollo_ids = [a["id"] for a in activities_by_moment["desarrollo"]]
+                cierre_ids = [a["id"] for a in activities_by_moment["cierre"]]
+
+                apertura_id = recommendations.get("apertura_recommended_id")
+                if apertura_id not in apertura_ids and activities_by_moment["apertura"]:
+                    apertura_id = activities_by_moment["apertura"][0]["id"]
+
+                desarrollo_rec_ids = recommendations.get("desarrollo_recommended_ids", [])
+                desarrollo_rec_ids = [did for did in desarrollo_rec_ids if did in desarrollo_ids][:3]
+                if not desarrollo_rec_ids and activities_by_moment["desarrollo"]:
+                    desarrollo_rec_ids = [a["id"] for a in activities_by_moment["desarrollo"][:3]]
+
+                cierre_id = recommendations.get("cierre_recommended_id")
+                if cierre_id not in cierre_ids and activities_by_moment["cierre"]:
+                    cierre_id = activities_by_moment["cierre"][0]["id"]
+
+                return {
+                    "apertura_recommended_id": apertura_id,
+                    "desarrollo_recommended_ids": desarrollo_rec_ids,
+                    "cierre_recommended_id": cierre_id
+                }
+
+            except Exception as e:
+                print(f"[AI] Error recommending activities: {type(e).__name__}: {e}")
+                # Fallback: return first activity of each type
+                return {
+                    "apertura_recommended_id": activities_by_moment["apertura"][0]["id"] if activities_by_moment["apertura"] else 1,
+                    "desarrollo_recommended_ids": [a["id"] for a in activities_by_moment["desarrollo"][:3]] if activities_by_moment["desarrollo"] else [6, 7, 8],
+                    "cierre_recommended_id": activities_by_moment["cierre"][0]["id"] if activities_by_moment["cierre"] else 13
+                }
+
+
+@app.get("/fonts", response_model=List[FontResponse])
+async def get_fonts(area_id: Optional[int] = None):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            if area_id:
+                cur.execute(
+                    "SELECT * FROM fonts WHERE (area_id = %s OR area_id IS NULL) AND is_validated = true ORDER BY name",
+                    (area_id,)
+                )
+            else:
+                cur.execute("SELECT * FROM fonts WHERE is_validated = true ORDER BY name")
             return cur.fetchall()
+
+
+@app.get("/fonts/{font_id}", response_model=FontResponse)
+async def get_font(font_id: int):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM fonts WHERE id = %s", (font_id,))
+            font = cur.fetchone()
+            if not font:
+                raise HTTPException(status_code=404, detail="Font not found")
+            return font
 
 
 # ============= Teacher Lesson Plan Endpoints =============
@@ -1842,6 +2534,28 @@ async def create_teacher_lesson_plan(plan: TeacherLessonPlanCreate):
             if not doc:
                 raise HTTPException(status_code=404, detail="Coordination document not found")
 
+            # Validate activities per moment
+            if plan.moments:
+                apertura_activities = plan.moments.get("apertura", {}).get("activities", [])
+                desarrollo_activities = plan.moments.get("desarrollo", {}).get("activities", [])
+                cierre_activities = plan.moments.get("cierre", {}).get("activities", [])
+
+                if len(apertura_activities) != 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Apertura debe tener exactamente 1 actividad"
+                    )
+                if len(desarrollo_activities) < 1 or len(desarrollo_activities) > 3:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Desarrollo debe tener entre 1 y 3 actividades"
+                    )
+                if len(cierre_activities) != 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cierre debe tener exactamente 1 actividad"
+                    )
+
             # Check if this is a shared class and if partner already has a plan
             shared_class_info = get_shared_class_info_for_course_subject(cur, plan.course_subject_id)
             if plan.class_number in shared_class_info:
@@ -1874,8 +2588,9 @@ async def create_teacher_lesson_plan(plan: TeacherLessonPlanCreate):
             cur.execute("""
                 INSERT INTO teacher_lesson_plans
                 (course_subject_id, coordination_document_id, class_number, title, category_ids,
-                 objective, knowledge_content, didactic_strategies, class_format, moments, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+                 objective, knowledge_content, didactic_strategies, class_format, moments, status,
+                 custom_instruction, resources_mode, global_font_id, moment_font_ids)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)
                 ON CONFLICT (course_subject_id, coordination_document_id, class_number)
                 DO UPDATE SET
                     title = EXCLUDED.title,
@@ -1885,6 +2600,10 @@ async def create_teacher_lesson_plan(plan: TeacherLessonPlanCreate):
                     didactic_strategies = EXCLUDED.didactic_strategies,
                     class_format = EXCLUDED.class_format,
                     moments = EXCLUDED.moments,
+                    custom_instruction = EXCLUDED.custom_instruction,
+                    resources_mode = EXCLUDED.resources_mode,
+                    global_font_id = EXCLUDED.global_font_id,
+                    moment_font_ids = EXCLUDED.moment_font_ids,
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING *
             """, (
@@ -1897,7 +2616,11 @@ async def create_teacher_lesson_plan(plan: TeacherLessonPlanCreate):
                 plan.knowledge_content,
                 plan.didactic_strategies,
                 plan.class_format,
-                json.dumps(plan.moments) if plan.moments else None
+                json.dumps(plan.moments) if plan.moments else None,
+                plan.custom_instruction,
+                plan.resources_mode,
+                plan.global_font_id,
+                json.dumps(plan.moment_font_ids) if plan.moment_font_ids else None
             ))
             conn.commit()
             return cur.fetchone()
@@ -1920,6 +2643,7 @@ class ProposalResponse(BaseModel):
     initial_agreements: list
     stages: list
     is_active: bool
+    status: str  # 'completed', 'recommended', 'upcoming'
     created_at: datetime
 
 class ProposalProgressCreate(BaseModel):
@@ -2064,6 +2788,22 @@ async def update_teacher_lesson_plan(plan_id: int, updates: TeacherLessonPlanUpd
             if updates.status is not None:
                 update_fields.append("status = %s")
                 values.append(updates.status)
+
+            if updates.custom_instruction is not None:
+                update_fields.append("custom_instruction = %s")
+                values.append(updates.custom_instruction)
+
+            if updates.resources_mode is not None:
+                update_fields.append("resources_mode = %s")
+                values.append(updates.resources_mode)
+
+            if updates.global_font_id is not None:
+                update_fields.append("global_font_id = %s")
+                values.append(updates.global_font_id)
+
+            if updates.moment_font_ids is not None:
+                update_fields.append("moment_font_ids = %s")
+                values.append(json.dumps(updates.moment_font_ids))
 
             values.append(plan_id)
             query = f"UPDATE teacher_lesson_plans SET {', '.join(update_fields)} WHERE id = %s RETURNING *"
@@ -2323,6 +3063,26 @@ async def chat_with_agreement(progress_id: int, agreement_id: str, chat: Proposa
             if not proposal:
                 raise HTTPException(status_code=404, detail="Proposal not found")
 
+            # Get teacher name
+            teacher_name = None
+            if progress.get("user_id"):
+                cur.execute("SELECT name FROM users WHERE id = %s", (progress["user_id"],))
+                user = cur.fetchone()
+                if user:
+                    teacher_name = user["name"]
+
+            # Get subject name from course_subject
+            subject_name = None
+            if progress.get("course_subject_id"):
+                cur.execute("""
+                    SELECT s.name FROM subjects s
+                    JOIN course_subjects cs ON cs.subject_id = s.id
+                    WHERE cs.id = %s
+                """, (progress["course_subject_id"],))
+                subject = cur.fetchone()
+                if subject:
+                    subject_name = subject["name"]
+
             # Find the agreement
             initial_agreements = proposal.get("initial_agreements", [])
             agreement = next((a for a in initial_agreements if a["id"] == agreement_id), None)
@@ -2333,6 +3093,9 @@ async def chat_with_agreement(progress_id: int, agreement_id: str, chat: Proposa
             agreements_data = progress.get("agreements_data") or {}
             existing_value = agreements_data.get(agreement_id, {}).get("decision_value")
 
+            # Get alizia_context if available
+            alizia_context = agreement.get("alizia_context")
+
             # Process chat
             history = [{"role": item.role, "content": item.content} for item in chat.history]
             result = process_proposal_chat(
@@ -2341,7 +3104,10 @@ async def chat_with_agreement(progress_id: int, agreement_id: str, chat: Proposa
                 responsible_type=agreement["responsible_type"],
                 proposal_name=proposal["name"],
                 history=history,
-                existing_value=existing_value
+                existing_value=existing_value,
+                alizia_context=alizia_context,
+                teacher_name=teacher_name,
+                subject_name=subject_name
             )
 
             # Update progress if value or completion changed
@@ -2392,6 +3158,26 @@ async def chat_with_stage_decision(progress_id: int, stage_number: int, decision
             if not proposal:
                 raise HTTPException(status_code=404, detail="Proposal not found")
 
+            # Get teacher name
+            teacher_name = None
+            if progress.get("user_id"):
+                cur.execute("SELECT name FROM users WHERE id = %s", (progress["user_id"],))
+                user = cur.fetchone()
+                if user:
+                    teacher_name = user["name"]
+
+            # Get subject name from course_subject
+            subject_name = None
+            if progress.get("course_subject_id"):
+                cur.execute("""
+                    SELECT s.name FROM subjects s
+                    JOIN course_subjects cs ON cs.subject_id = s.id
+                    WHERE cs.id = %s
+                """, (progress["course_subject_id"],))
+                subject = cur.fetchone()
+                if subject:
+                    subject_name = subject["name"]
+
             # Find the stage and decision
             stages = proposal.get("stages", [])
             stage = next((s for s in stages if s["number"] == stage_number), None)
@@ -2407,6 +3193,9 @@ async def chat_with_stage_decision(progress_id: int, stage_number: int, decision
             stage_key = str(stage_number)
             existing_value = stages_data.get(stage_key, {}).get(decision_id, {}).get("decision_value")
 
+            # Get alizia_context if available
+            alizia_context = decision.get("alizia_context")
+
             # Process chat
             history = [{"role": item.role, "content": item.content} for item in chat.history]
             result = process_proposal_chat(
@@ -2415,7 +3204,10 @@ async def chat_with_stage_decision(progress_id: int, stage_number: int, decision
                 responsible_type=decision["responsible_type"],
                 proposal_name=proposal["name"],
                 history=history,
-                existing_value=existing_value
+                existing_value=existing_value,
+                alizia_context=alizia_context,
+                teacher_name=teacher_name,
+                subject_name=subject_name
             )
 
             # Update progress if value or completion changed
@@ -2444,3 +3236,92 @@ async def chat_with_stage_decision(progress_id: int, stage_number: int, decision
                 conn.commit()
 
             return result
+
+
+# Resources Endpoints
+@app.get("/resources", response_model=List[ResourceResponse])
+async def get_resources(user_id: Optional[int] = None):
+    """List all resources, optionally filtered by user_id."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            if user_id:
+                cur.execute("SELECT * FROM resources WHERE user_id = %s ORDER BY updated_at DESC", (user_id,))
+            else:
+                cur.execute("SELECT * FROM resources ORDER BY updated_at DESC")
+            return cur.fetchall()
+
+
+@app.post("/resources", response_model=ResourceResponse)
+async def create_resource(resource: ResourceCreate):
+    """Create a new resource with template content."""
+    if resource.resource_type not in RESOURCE_TEMPLATES:
+        raise HTTPException(status_code=400, detail=f"Invalid resource_type. Must be one of: {list(RESOURCE_TEMPLATES.keys())}")
+
+    content = RESOURCE_TEMPLATES[resource.resource_type]
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO resources (title, resource_type, content, user_id, status)
+                VALUES (%s, %s, %s, %s, 'draft')
+                RETURNING *
+            """, (resource.title, resource.resource_type, content, resource.user_id))
+            conn.commit()
+            return cur.fetchone()
+
+
+@app.get("/resources/{resource_id}", response_model=ResourceResponse)
+async def get_resource(resource_id: int):
+    """Get a specific resource by ID."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM resources WHERE id = %s", (resource_id,))
+            resource = cur.fetchone()
+            if not resource:
+                raise HTTPException(status_code=404, detail="Resource not found")
+            return resource
+
+
+@app.patch("/resources/{resource_id}", response_model=ResourceResponse)
+async def update_resource(resource_id: int, update: ResourceUpdate):
+    """Update a resource's title or content."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM resources WHERE id = %s", (resource_id,))
+            resource = cur.fetchone()
+            if not resource:
+                raise HTTPException(status_code=404, detail="Resource not found")
+
+            updates = []
+            values = []
+            if update.title is not None:
+                updates.append("title = %s")
+                values.append(update.title)
+            if update.content is not None:
+                updates.append("content = %s")
+                values.append(update.content)
+
+            if updates:
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                values.append(resource_id)
+                cur.execute(f"""
+                    UPDATE resources SET {', '.join(updates)}
+                    WHERE id = %s RETURNING *
+                """, values)
+                conn.commit()
+                return cur.fetchone()
+            return resource
+
+
+@app.delete("/resources/{resource_id}", response_model=DeleteResponse)
+async def delete_resource(resource_id: int):
+    """Delete a resource."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM resources WHERE id = %s", (resource_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Resource not found")
+
+            cur.execute("DELETE FROM resources WHERE id = %s", (resource_id,))
+            conn.commit()
+            return {"message": "Resource deleted successfully", "id": resource_id}

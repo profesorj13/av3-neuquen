@@ -1,17 +1,23 @@
 #!/bin/bash
 set -e
 
-DB_URL="postgresql://postgres:postgres@localhost:5480/av3"
+CONTAINER="av3-postgres"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "Resetting database..."
-psql "$DB_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+docker exec -i $CONTAINER psql -U postgres -d av3 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 
 echo "Running migrations..."
-psql "$DB_URL" -f "$PROJECT_DIR/migrations/001_initial.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/001_initial.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/002_proposals.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/003_fonts.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/004_activities_moment_type.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/005_coordination_doc_updates.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/006_resources.sql"
 
 echo "Running seeds..."
-psql "$DB_URL" -f "$PROJECT_DIR/seeds/seed.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/seeds/seed.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/seeds/seed_proposals.sql"
 
 echo "Database reset complete!"

@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS proposals (
     alizia_info JSONB DEFAULT '{}',
     initial_agreements JSONB DEFAULT '[]',
     stages JSONB DEFAULT '[]',
+    annexes JSONB DEFAULT '{}',
     is_active BOOLEAN DEFAULT true,
+    status VARCHAR(50) DEFAULT 'upcoming', -- 'completed', 'recommended', 'upcoming'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
