@@ -1,0 +1,286 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 50 },
+      "data": { "node_type": "start", "config": {} }
+    },
+    {
+      "id": "function_resolve_user",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 200 },
+      "data": {
+        "node_type": "function",
+        "config": {
+          "function_id": "RESOLVE_USER_FUNCTION_ID"
+        }
+      }
+    },
+    {
+      "id": "decide_role",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 400 },
+      "data": {
+        "node_type": "decide",
+        "config": {
+          "decision_type": "function",
+          "function_id": "ROUTE_BY_ROLE_FUNCTION_ID",
+          "conditions": [
+            { "label": "coordinator", "description": "User is a coordinator" },
+            { "label": "teacher", "description": "User is a teacher" },
+            { "label": "not_registered", "description": "User not found" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send_not_registered",
+      "type": "flow-node",
+      "position": { "x": 600, "y": 600 },
+      "data": {
+        "node_type": "send_text",
+        "config": {
+          "message": "No encontramos tu número registrado en el sistema. Contactá al administrador para darte de alta.",
+          "delay_seconds": 0
+        }
+      }
+    },
+    {
+      "id": "send_coordinator_menu",
+      "type": "flow-node",
+      "position": { "x": 0, "y": 600 },
+      "data": {
+        "node_type": "send_interactive",
+        "config": {
+          "interactive_type": "list",
+          "body_text": "Hola {{vars.user.name}} 👋\n¿Qué querés hacer?",
+          "button_text": "Ver opciones",
+          "sections": [
+            {
+              "title": "Coordinación",
+              "rows": [
+                { "id": "coord_docs", "title": "Mis documentos", "description": "Ver documentos de coordinación" },
+                { "id": "coord_publish", "title": "Publicar documento", "description": "Publicar un borrador" },
+                { "id": "coord_generate", "title": "Generar con IA", "description": "Generar contenido con IA" },
+                { "id": "coord_alizia", "title": "Hablar con Alizia", "description": "Chat con asistente IA" }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wait_coordinator_choice",
+      "type": "flow-node",
+      "position": { "x": 0, "y": 800 },
+      "data": {
+        "node_type": "wait_for_response",
+        "config": { "save_response_to": "menu_choice" }
+      }
+    },
+    {
+      "id": "decide_coordinator_action",
+      "type": "flow-node",
+      "position": { "x": 0, "y": 1000 },
+      "data": {
+        "node_type": "decide",
+        "config": {
+          "decision_type": "ai",
+          "conditions": [
+            { "label": "docs", "description": "User wants to see documents (coord_docs)" },
+            { "label": "publish", "description": "User wants to publish a document (coord_publish)" },
+            { "label": "generate", "description": "User wants to generate AI content (coord_generate)" },
+            { "label": "alizia", "description": "User wants to chat with Alizia (coord_alizia)" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "function_fetch_docs_coord",
+      "type": "flow-node",
+      "position": { "x": -200, "y": 1200 },
+      "data": {
+        "node_type": "function",
+        "config": {
+          "function_id": "FETCH_DOCUMENTS_FUNCTION_ID"
+        }
+      }
+    },
+    {
+      "id": "send_docs_coord",
+      "type": "flow-node",
+      "position": { "x": -200, "y": 1400 },
+      "data": {
+        "node_type": "send_text",
+        "config": {
+          "message": "{{vars.documents_text}}",
+          "delay_seconds": 0
+        }
+      }
+    },
+    {
+      "id": "send_publish_prompt",
+      "type": "flow-node",
+      "position": { "x": 0, "y": 1200 },
+      "data": {
+        "node_type": "send_text",
+        "config": {
+          "message": "Enviá el ID del documento que querés publicar (lo podés ver en la lista de documentos).",
+          "delay_seconds": 0
+        }
+      }
+    },
+    {
+      "id": "send_generate_prompt",
+      "type": "flow-node",
+      "position": { "x": 200, "y": 1200 },
+      "data": {
+        "node_type": "send_text",
+        "config": {
+          "message": "Enviá el ID del documento para el que querés generar contenido con IA.",
+          "delay_seconds": 0
+        }
+      }
+    },
+    {
+      "id": "send_alizia_prompt",
+      "type": "flow-node",
+      "position": { "x": 400, "y": 1200 },
+      "data": {
+        "node_type": "send_text",
+        "config": {
+          "message": "Primero necesito el ID del documento. Envialo y luego podés chatear con Alizia. Escribí \"salir\" para volver al menú.",
+          "delay_seconds": 0
+        }
+      }
+    },
+    {
+      "id": "send_teacher_menu",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 600 },
+      "data": {
+        "node_type": "send_interactive",
+        "config": {
+          "interactive_type": "list",
+          "body_text": "Hola {{vars.user.name}} 👋\n¿Qué querés hacer?",
+          "button_text": "Ver opciones",
+          "sections": [
+            {
+              "title": "Docente",
+              "rows": [
+                { "id": "teacher_subjects", "title": "Mis materias", "description": "Ver materias asignadas" },
+                { "id": "teacher_docs", "title": "Doc. de coordinación", "description": "Ver documentos publicados" },
+                { "id": "teacher_alizia", "title": "Hablar con Alizia", "description": "Chat con asistente IA" }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wait_teacher_choice",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 800 },
+      "data": {
+        "node_type": "wait_for_response",
+        "config": { "save_response_to": "menu_choice" }
+      }
+    },
+    {
+      "id": "decide_teacher_action",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 1000 },
+      "data": {
+        "node_type": "decide",
+        "config": {
+          "decision_type": "ai",
+          "conditions": [
+            { "label": "subjects", "description": "User wants to see subjects (teacher_subjects)" },
+            { "label": "docs", "description": "User wants to see coordination documents (teacher_docs)" },
+            { "label": "alizia", "description": "User wants to chat with Alizia (teacher_alizia)" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "function_fetch_subjects",
+      "type": "flow-node",
+      "position": { "x": 200, "y": 1200 },
+      "data": {
+        "node_type": "function",
+        "config": {
+          "function_id": "FETCH_TEACHER_SUBJECTS_FUNCTION_ID"
+        }
+      }
+    },
+    {
+      "id": "send_subjects",
+      "type": "flow-node",
+      "position": { "x": 200, "y": 1400 },
+      "data": {
+        "node_type": "send_text",
+        "config": {
+          "message": "{{vars.subjects_text}}",
+          "delay_seconds": 0
+        }
+      }
+    },
+    {
+      "id": "function_fetch_docs_teacher",
+      "type": "flow-node",
+      "position": { "x": 400, "y": 1200 },
+      "data": {
+        "node_type": "function",
+        "config": {
+          "function_id": "FETCH_DOCUMENTS_FUNCTION_ID"
+        }
+      }
+    },
+    {
+      "id": "send_docs_teacher",
+      "type": "flow-node",
+      "position": { "x": 400, "y": 1400 },
+      "data": {
+        "node_type": "send_text",
+        "config": {
+          "message": "{{vars.documents_text}}",
+          "delay_seconds": 0
+        }
+      }
+    },
+    {
+      "id": "send_teacher_alizia_prompt",
+      "type": "flow-node",
+      "position": { "x": 600, "y": 1200 },
+      "data": {
+        "node_type": "send_text",
+        "config": {
+          "message": "Enviame el ID del documento y luego podés chatear con Alizia. Escribí \"salir\" para volver al menú.",
+          "delay_seconds": 0
+        }
+      }
+    }
+  ],
+  "edges": [
+    { "source": "start", "target": "function_resolve_user", "label": "next" },
+    { "source": "function_resolve_user", "target": "decide_role", "label": "next" },
+    { "source": "decide_role", "target": "send_coordinator_menu", "label": "coordinator" },
+    { "source": "decide_role", "target": "send_teacher_menu", "label": "teacher" },
+    { "source": "decide_role", "target": "send_not_registered", "label": "not_registered" },
+    { "source": "send_coordinator_menu", "target": "wait_coordinator_choice", "label": "next" },
+    { "source": "wait_coordinator_choice", "target": "decide_coordinator_action", "label": "next" },
+    { "source": "decide_coordinator_action", "target": "function_fetch_docs_coord", "label": "docs" },
+    { "source": "decide_coordinator_action", "target": "send_publish_prompt", "label": "publish" },
+    { "source": "decide_coordinator_action", "target": "send_generate_prompt", "label": "generate" },
+    { "source": "decide_coordinator_action", "target": "send_alizia_prompt", "label": "alizia" },
+    { "source": "function_fetch_docs_coord", "target": "send_docs_coord", "label": "next" },
+    { "source": "send_teacher_menu", "target": "wait_teacher_choice", "label": "next" },
+    { "source": "wait_teacher_choice", "target": "decide_teacher_action", "label": "next" },
+    { "source": "decide_teacher_action", "target": "function_fetch_subjects", "label": "subjects" },
+    { "source": "decide_teacher_action", "target": "function_fetch_docs_teacher", "label": "docs" },
+    { "source": "decide_teacher_action", "target": "send_teacher_alizia_prompt", "label": "alizia" },
+    { "source": "function_fetch_subjects", "target": "send_subjects", "label": "next" },
+    { "source": "function_fetch_docs_teacher", "target": "send_docs_teacher", "label": "next" }
+  ]
+}

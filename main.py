@@ -2,6 +2,8 @@ import os
 import json
 import copy
 import asyncio
+import logging
+import urllib.request
 import psycopg2
 from dotenv import load_dotenv
 
@@ -29,6 +31,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localho
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-5-mini")
+
+KAPSO_WEBHOOK_URL = os.getenv("KAPSO_WEBHOOK_URL", "")  # Kapso workflow API trigger URL
+
+logger = logging.getLogger(__name__)
 
 ai_client = AzureOpenAI(
     api_version="2024-02-15-preview",
@@ -134,6 +140,7 @@ class UserResponse(BaseModel):
     id: int
     email: str
     name: str
+    phone: Optional[str] = None
     avatar_url: Optional[str] = None
     created_at: datetime
 
@@ -1675,6 +1682,28 @@ async def get_users():
             return cur.fetchall()
 
 
+@app.get("/users/by-phone/{phone}")
+async def get_user_by_phone(phone: str):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE phone = %s", (phone,))
+            user = cur.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            # Determine role: coordinator if referenced in areas.coordinator_id
+            cur.execute("SELECT id, name FROM areas WHERE coordinator_id = %s", (user["id"],))
+            coordinated_areas = cur.fetchall()
+            # Check if teacher (has course_subjects)
+            cur.execute("SELECT COUNT(*) as cnt FROM course_subjects WHERE teacher_id = %s", (user["id"],))
+            is_teacher = cur.fetchone()["cnt"] > 0
+            role = "coordinator" if coordinated_areas else ("teacher" if is_teacher else "user")
+            return {
+                **dict(user),
+                "role": role,
+                "coordinated_areas": coordinated_areas if coordinated_areas else []
+            }
+
+
 @app.get("/areas", response_model=List[AreaResponse])
 async def get_areas():
     with get_db() as conn:
@@ -1896,7 +1925,31 @@ async def update_coordination_document(doc_id: int, updates: CoordinationDocumen
             query = f"UPDATE coordination_documents SET {', '.join(update_fields)} WHERE id = %s RETURNING *"
             cur.execute(query, values)
             conn.commit()
-            return cur.fetchone()
+            updated_doc = cur.fetchone()
+
+            # Notify via webhook when document is published
+            if updates.status == "published" and KAPSO_WEBHOOK_URL:
+                try:
+                    cur.execute("SELECT name FROM areas WHERE id = %s", (updated_doc["area_id"],))
+                    area = cur.fetchone()
+                    payload = json.dumps({
+                        "event": "document_published",
+                        "document_id": updated_doc["id"],
+                        "document_name": updated_doc["name"],
+                        "area_id": updated_doc["area_id"],
+                        "area_name": area["name"] if area else "",
+                    }).encode()
+                    req = urllib.request.Request(
+                        KAPSO_WEBHOOK_URL,
+                        data=payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    urllib.request.urlopen(req, timeout=5)
+                except Exception as e:
+                    logger.warning(f"Failed to send publish webhook: {e}")
+
+            return updated_doc
 
 
 @app.delete("/coordination-documents/{doc_id}", response_model=DeleteResponse)

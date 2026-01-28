@@ -1,0 +1,19 @@
+{
+  "name": "document_published",
+  "language": "es",
+  "category": "UTILITY",
+  "parameter_format": "NAMED",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{teacher_name}}, se publicó el documento \"{{doc_name}}\" para el área {{area_name}}. Podés consultarlo desde la app o escribirme para más detalles.",
+      "example": {
+        "named_params": {
+          "teacher_name": "María González",
+          "doc_name": "Planificación Q1",
+          "area_name": "Cs. Sociales"
+        }
+      }
+    }
+  ]
+}

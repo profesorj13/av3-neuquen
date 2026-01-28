@@ -1,15 +1,15 @@
 -- Real educational data for Area 1 - Cs. Sociales, Políticas y Económicas
 
 -- 2 generic coordinators
-INSERT INTO users (email, name) VALUES
-    ('coordinador1@demo.edu', 'Coordinador Demo 1'),
-    ('coordinador2@demo.edu', 'Coordinador Demo 2');
+INSERT INTO users (email, name, phone) VALUES
+    ('coordinador1@demo.edu', 'Coordinador Demo 1', '+5491112345001'),
+    ('coordinador2@demo.edu', 'Coordinador Demo 2', '+5491112345002');
 
 -- 3 teachers
-INSERT INTO users (email, name) VALUES
-    ('docente1@escuelademo.edu', 'María González'),
-    ('docente2@escuelademo.edu', 'Carlos Rodríguez'),
-    ('docente3@escuelademo.edu', 'Ana Martínez');
+INSERT INTO users (email, name, phone) VALUES
+    ('docente1@escuelademo.edu', 'María González', '+5491112345003'),
+    ('docente2@escuelademo.edu', 'Carlos Rodríguez', '+5491112345004'),
+    ('docente3@escuelademo.edu', 'Ana Martínez', '+5491112345005');
 
 -- 7 real areas
 INSERT INTO areas (coordinator_id, name, description) VALUES

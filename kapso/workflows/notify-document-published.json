@@ -1,0 +1,49 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 50 },
+      "data": { "node_type": "start", "config": {} }
+    },
+    {
+      "id": "function_get_teachers",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 200 },
+      "data": {
+        "node_type": "function",
+        "config": {
+          "function_id": "GET_AREA_TEACHERS_FUNCTION_ID"
+        }
+      }
+    },
+    {
+      "id": "send_template_notification",
+      "type": "flow-node",
+      "position": { "x": 300, "y": 400 },
+      "data": {
+        "node_type": "send_template",
+        "config": {
+          "template_name": "document_published",
+          "language": "es",
+          "iterate_over": "vars.teachers",
+          "to": "{{item.phone}}",
+          "components": [
+            {
+              "type": "body",
+              "parameters": [
+                { "type": "text", "parameter_name": "teacher_name", "text": "{{item.name}}" },
+                { "type": "text", "parameter_name": "doc_name", "text": "{{vars.document_name}}" },
+                { "type": "text", "parameter_name": "area_name", "text": "{{vars.area_name}}" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "edges": [
+    { "source": "start", "target": "function_get_teachers", "label": "next" },
+    { "source": "function_get_teachers", "target": "send_template_notification", "label": "next" }
+  ]
+}
