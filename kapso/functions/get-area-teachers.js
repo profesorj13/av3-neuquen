@@ -7,9 +7,10 @@ async function handler(request, env) {
   }
 
   const apiBase = await env.KV.get("config:api_base_url") || "http://localhost:8000";
+  const headers = { "ngrok-skip-browser-warning": "true" };
 
   // Get subjects for this area
-  const subjectsRes = await fetch(`${apiBase}/subjects`);
+  const subjectsRes = await fetch(`${apiBase}/subjects`, { headers });
   if (!subjectsRes.ok) {
     return new Response(JSON.stringify({ vars: { teachers: [] } }));
   }
@@ -19,7 +20,7 @@ async function handler(request, env) {
     .map(s => s.id);
 
   // Get course_subjects to find teachers
-  const csRes = await fetch(`${apiBase}/course-subjects`);
+  const csRes = await fetch(`${apiBase}/course-subjects`, { headers });
   if (!csRes.ok) {
     return new Response(JSON.stringify({ vars: { teachers: [] } }));
   }
@@ -31,7 +32,7 @@ async function handler(request, env) {
   )];
 
   // Get user details
-  const usersRes = await fetch(`${apiBase}/users`);
+  const usersRes = await fetch(`${apiBase}/users`, { headers });
   if (!usersRes.ok) {
     return new Response(JSON.stringify({ vars: { teachers: [] } }));
   }

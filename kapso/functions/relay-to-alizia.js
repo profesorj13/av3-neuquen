@@ -22,7 +22,7 @@ async function handler(request, env) {
   const apiBase = await env.KV.get("config:api_base_url") || "http://localhost:8000";
   const res = await fetch(`${apiBase}/coordination-documents/${docId}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
     body: JSON.stringify({ history })
   });
 

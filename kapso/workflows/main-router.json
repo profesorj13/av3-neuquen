@@ -55,8 +55,8 @@
         "config": {
           "interactive_type": "list",
           "body_text": "Hola {{vars.user.name}} 👋\n¿Qué querés hacer?",
-          "button_text": "Ver opciones",
-          "sections": [
+          "list_button_text": "Ver opciones",
+          "list_sections": [
             {
               "title": "Coordinación",
               "rows": [
@@ -87,6 +87,7 @@
         "node_type": "decide",
         "config": {
           "decision_type": "ai",
+          "provider_model_id": "PROVIDER_MODEL_ID",
           "conditions": [
             { "label": "docs", "description": "User wants to see documents (coord_docs)" },
             { "label": "publish", "description": "User wants to publish a document (coord_publish)" },
@@ -164,8 +165,8 @@
         "config": {
           "interactive_type": "list",
           "body_text": "Hola {{vars.user.name}} 👋\n¿Qué querés hacer?",
-          "button_text": "Ver opciones",
-          "sections": [
+          "list_button_text": "Ver opciones",
+          "list_sections": [
             {
               "title": "Docente",
               "rows": [
@@ -195,6 +196,7 @@
         "node_type": "decide",
         "config": {
           "decision_type": "ai",
+          "provider_model_id": "PROVIDER_MODEL_ID",
           "conditions": [
             { "label": "subjects", "description": "User wants to see subjects (teacher_subjects)" },
             { "label": "docs", "description": "User wants to see coordination documents (teacher_docs)" },

@@ -16,9 +16,11 @@ docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/004
 docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/005_coordination_doc_updates.sql"
 docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/006_resources.sql"
 docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/007_add_phone.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/migrations/008_inclusion.sql"
 
 echo "Running seeds..."
 docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/seeds/seed.sql"
 docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/seeds/seed_proposals.sql"
+docker exec -i $CONTAINER psql -U postgres -d av3 < "$PROJECT_DIR/seeds/inclusion_seed.sql"
 
 echo "Database reset complete!"

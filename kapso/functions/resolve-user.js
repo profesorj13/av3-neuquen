@@ -15,7 +15,9 @@ async function handler(request, env) {
 
   // Lookup via backend API
   const apiBase = await env.KV.get("config:api_base_url") || "http://localhost:8000";
-  const res = await fetch(`${apiBase}/users/by-phone/${encodeURIComponent(phone)}`);
+  const res = await fetch(`${apiBase}/users/by-phone/${encodeURIComponent(phone)}`, {
+    headers: { "ngrok-skip-browser-warning": "true" }
+  });
 
   if (res.status === 404) {
     return new Response(JSON.stringify({ vars: { user: null, error: "not_registered" } }));

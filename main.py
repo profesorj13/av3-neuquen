@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import copy
 import asyncio
@@ -1684,6 +1685,9 @@ async def get_users():
 
 @app.get("/users/by-phone/{phone}")
 async def get_user_by_phone(phone: str):
+    # Normalize phone: add + prefix if missing
+    if not phone.startswith("+"):
+        phone = f"+{phone}"
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM users WHERE phone = %s", (phone,))
@@ -3378,3 +3382,430 @@ async def delete_resource(resource_id: int):
             cur.execute("DELETE FROM resources WHERE id = %s", (resource_id,))
             conn.commit()
             return {"message": "Resource deleted successfully", "id": resource_id}
+
+
+# ==================== INCLUSION MODULE ====================
+
+class RampResponse(BaseModel):
+    id: int
+    name: str
+    description: str
+    short_description: Optional[str] = None
+    sort_order: int = 0
+
+class DeviceResponse(BaseModel):
+    id: int
+    ramp_id: int
+    name: str
+    description: str
+    image_url: Optional[str] = None
+    qr_code: Optional[str] = None
+    how_to_use: Optional[str] = None
+    recommendations: Optional[str] = None
+    rationale: Optional[str] = None
+    classroom_benefit: Optional[str] = None
+    needs_description: Optional[str] = None
+    evaluation_criteria: Optional[str] = None
+    quantity: int = 1
+    sort_order: int = 0
+    ramp_name: Optional[str] = None
+
+class StudentInclusionProfileResponse(BaseModel):
+    id: int
+    student_id: int
+    student_name: Optional[str] = None
+    is_transitory: bool = False
+    difficulties: List[str] = []
+    free_description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class StudentInclusionProfileCreate(BaseModel):
+    is_transitory: bool = False
+    difficulties: List[str] = []
+    free_description: Optional[str] = None
+
+class InclusionRecommendRequest(BaseModel):
+    subject: str
+    objective: str
+    duration: Optional[str] = None
+    dynamic: Optional[str] = None
+    materials: Optional[str] = None
+    student_id: int
+    history: List[ChatHistoryItem] = []
+
+class InclusionAssistRequest(BaseModel):
+    message: str
+    student_id: Optional[int] = None
+    history: List[ChatHistoryItem] = []
+
+
+@app.get("/ramps")
+async def list_ramps():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM ramps ORDER BY sort_order")
+            return cur.fetchall()
+
+
+@app.get("/ramps/{ramp_id}")
+async def get_ramp(ramp_id: int):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM ramps WHERE id = %s", (ramp_id,))
+            ramp = cur.fetchone()
+            if not ramp:
+                raise HTTPException(status_code=404, detail="Ramp not found")
+            cur.execute("SELECT d.*, r.name as ramp_name FROM devices d JOIN ramps r ON d.ramp_id = r.id WHERE d.ramp_id = %s ORDER BY d.sort_order", (ramp_id,))
+            devices = cur.fetchall()
+            return {**ramp, "devices": devices}
+
+
+@app.get("/devices")
+async def list_devices(ramp_id: Optional[int] = None):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            if ramp_id:
+                cur.execute("SELECT d.*, r.name as ramp_name FROM devices d JOIN ramps r ON d.ramp_id = r.id WHERE d.ramp_id = %s ORDER BY d.sort_order", (ramp_id,))
+            else:
+                cur.execute("SELECT d.*, r.name as ramp_name FROM devices d JOIN ramps r ON d.ramp_id = r.id ORDER BY d.ramp_id, d.sort_order")
+            return cur.fetchall()
+
+
+@app.get("/devices/{device_id}")
+async def get_device(device_id: int):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT d.*, r.name as ramp_name FROM devices d JOIN ramps r ON d.ramp_id = r.id WHERE d.id = %s", (device_id,))
+            device = cur.fetchone()
+            if not device:
+                raise HTTPException(status_code=404, detail="Device not found")
+            return device
+
+
+@app.get("/students/{student_id}/inclusion-profile")
+async def get_student_inclusion_profile(student_id: int):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT sip.*, s.name as student_name
+                FROM student_inclusion_profiles sip
+                JOIN students s ON sip.student_id = s.id
+                WHERE sip.student_id = %s
+            """, (student_id,))
+            profile = cur.fetchone()
+            if not profile:
+                raise HTTPException(status_code=404, detail="Inclusion profile not found")
+            return profile
+
+
+@app.post("/students/{student_id}/inclusion-profile")
+async def create_or_update_inclusion_profile(student_id: int, data: StudentInclusionProfileCreate):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM students WHERE id = %s", (student_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Student not found")
+
+            cur.execute("SELECT id FROM student_inclusion_profiles WHERE student_id = %s", (student_id,))
+            existing = cur.fetchone()
+
+            if existing:
+                cur.execute("""
+                    UPDATE student_inclusion_profiles
+                    SET is_transitory = %s, difficulties = %s, free_description = %s, updated_at = NOW()
+                    WHERE student_id = %s
+                    RETURNING *
+                """, (data.is_transitory, data.difficulties, data.free_description, student_id))
+            else:
+                cur.execute("""
+                    INSERT INTO student_inclusion_profiles (student_id, is_transitory, difficulties, free_description)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING *
+                """, (student_id, data.is_transitory, data.difficulties, data.free_description))
+
+            conn.commit()
+            profile = cur.fetchone()
+            cur.execute("SELECT name FROM students WHERE id = %s", (student_id,))
+            student = cur.fetchone()
+            return {**profile, "student_name": student["name"] if student else None}
+
+
+@app.get("/courses/{course_id}/inclusion-students")
+async def get_course_inclusion_students(course_id: int):
+    """Get all students in a course with their inclusion profiles (if any)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT s.id, s.name, s.course_id,
+                       sip.id as profile_id, sip.is_transitory, sip.difficulties,
+                       sip.free_description
+                FROM students s
+                LEFT JOIN student_inclusion_profiles sip ON s.id = sip.student_id
+                WHERE s.course_id = %s
+                ORDER BY sip.id IS NOT NULL DESC, s.name
+            """, (course_id,))
+            return cur.fetchall()
+
+
+INCLUSION_SYSTEM_PROMPT = """Sos Alicia, asistente de inclusion educativa de Educabot.
+Tu rol es ayudar a docentes a integrar dispositivos adaptativos de la Valija de Inclusion en sus clases.
+
+CATALOGO DE DISPOSITIVOS:
+{devices_catalog}
+
+INSTRUCCIONES:
+- Responde en espanol rioplatense, tono amable y profesional.
+- Usa lenguaje docente, NO patologizante.
+- Cuando recomiendes un dispositivo, siempre explica POR QUE sirve para esa actividad y esa necesidad especifica.
+- Si no tenes suficiente informacion, pregunta de forma conversacional.
+- Mantene las respuestas concisas y practicas (el docente esta en el aula).
+- IMPORTANTE: Cuando recomiendes un dispositivo, incluye al final de tu respuesta una linea con el formato exacto:
+  [DEVICE_ID:X] donde X es el id numerico del dispositivo recomendado.
+  Esto es para que el sistema pueda mostrar la ficha del dispositivo. Solo incluye un dispositivo principal.
+- Estructura tu respuesta de recomendacion asi:
+  1. Breve explicacion de por que ese dispositivo es adecuado
+  2. Bullets con beneficios especificos para la situacion
+  3. Como usarlo en la actividad especifica
+  4. Tips de integracion con el grupo
+"""
+
+
+@app.post("/inclusion/recommend")
+async def inclusion_recommend(data: InclusionRecommendRequest):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # Fetch student profile
+            cur.execute("""
+                SELECT sip.*, s.name as student_name
+                FROM student_inclusion_profiles sip
+                JOIN students s ON sip.student_id = s.id
+                WHERE sip.student_id = %s
+            """, (data.student_id,))
+            profile = cur.fetchone()
+            if not profile:
+                raise HTTPException(status_code=404, detail="Student inclusion profile not found")
+
+            # Fetch all devices with ramp names
+            cur.execute("SELECT d.*, r.name as ramp_name FROM devices d JOIN ramps r ON d.ramp_id = r.id ORDER BY d.ramp_id, d.sort_order")
+            devices = cur.fetchall()
+
+            # Build catalog JSON
+            devices_catalog = json.dumps([{
+                "id": d["id"],
+                "name": d["name"],
+                "ramp": d["ramp_name"],
+                "description": d["description"],
+                "how_to_use": d["how_to_use"],
+                "rationale": d["rationale"],
+                "classroom_benefit": d["classroom_benefit"],
+                "needs_description": d["needs_description"],
+                "quantity": d["quantity"]
+            } for d in devices], ensure_ascii=False)
+
+            system_prompt = INCLUSION_SYSTEM_PROMPT.format(devices_catalog=devices_catalog)
+
+            # Add student context
+            difficulties_text = ", ".join(profile["difficulties"]) if profile["difficulties"] else "Sin especificar"
+            student_context = f"""
+FICHA DEL ALUMNO:
+- Nombre: {profile['student_name']}
+- Condicion: {'Transitoria' if profile['is_transitory'] else 'Permanente'}
+- Dificultades: {difficulties_text}
+- Descripcion: {profile['free_description'] or 'Sin descripcion adicional'}
+
+ACTIVIDAD PLANIFICADA:
+- Asignatura: {data.subject}
+- Objetivo: {data.objective}
+- Duracion: {data.duration or 'No especificada'}
+- Dinamica: {data.dynamic or 'No especificada'}
+- Materiales: {data.materials or 'No especificados'}
+"""
+            system_prompt += student_context
+
+            # For follow-up messages, add instruction to keep it conversational
+            if data.history:
+                system_prompt += """
+Si ya recomendaste un dispositivo en mensajes anteriores, NO lo repitas completo.
+Responde de forma conversacional y breve a las preguntas del docente.
+No incluyas [DEVICE_ID:X] en respuestas de seguimiento a menos que estes recomendando un dispositivo DIFERENTE.
+"""
+
+            # Build messages
+            messages = [{"role": "system", "content": system_prompt}]
+            for msg in data.history:
+                messages.append({"role": msg.role, "content": msg.content})
+
+            # Add the recommendation request as user message if no history
+            if not data.history:
+                messages.append({"role": "user", "content": f"Necesito una recomendacion de dispositivo para {profile['student_name']} en la actividad de {data.objective} en {data.subject}."})
+
+            try:
+                response = ai_client.chat.completions.create(
+                    model=AZURE_OPENAI_DEPLOYMENT,
+                    messages=messages,
+                    max_completion_tokens=1500,
+                )
+                ai_response = response.choices[0].message.content
+
+                # Extract device ID from response
+                import re
+                device_id_match = re.search(r'\[DEVICE_ID:(\d+)\]', ai_response)
+                recommended_device = None
+                if device_id_match:
+                    device_id = int(device_id_match.group(1))
+                    recommended_device = next((d for d in devices if d["id"] == device_id), None)
+                    # Clean the tag from the response
+                    clean_response = re.sub(r'\[DEVICE_ID:\d+\]', '', ai_response).strip()
+                else:
+                    clean_response = ai_response
+
+                return {
+                    "response": clean_response,
+                    "device": dict(recommended_device) if recommended_device else None,
+                    "student_profile": dict(profile),
+                }
+            except Exception as e:
+                logger.error(f"AI recommendation error: {e}")
+                raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
+
+
+ASSIST_SYSTEM_PROMPT = """Eres Alizia, una asistente amable y efectiva de inclusion educativa en tiempo real para el aula.
+Un docente te esta consultando desde el aula para que le ayudes.
+
+CATALOGO DE DISPOSITIVOS DISPONIBLES:
+{devices_catalog}
+
+ALUMNOS DEL CURSO (con perfiles de inclusion):
+{students_context}
+
+INSTRUCCIONES:
+- Responde en espanol rioplatense, tono amable, calmo y profesional.
+- Usa lenguaje docente, NO patologizante.
+- Mantene las respuestas BREVES y ACCIONABLES (el docente esta en el aula ahora mismo).
+
+IDENTIFICACION DE ALUMNOS:
+- Se flexible con los nombres: apodos, diminutivos, nombres parciales o informales deben matchear con el alumno mas probable.
+  Ejemplos: "Valen" = "Valentina Garcia", "Facu" = "Facundo ...", "Nico" = "Nicolas ...", "Cami" = "Camila ...", etc.
+- Si el nombre es razonablemente claro (aunque sea parcial o informal), identifica al alumno directamente sin preguntar confirmacion.
+  Incluye al final: [STUDENT_ID:X] donde X es el id del alumno identificado.
+- Solo pregunta "¿A que alumno te referis?" si realmente hay ambiguedad (ej: dos alumnos podrian matchear) o si no menciona ningun nombre.
+- Si el docente habla de una situacion sin mencionar a nadie, primero da consejos generales y pregunta: "¿Quien esta pasando por esto?"
+
+RECOMENDACION DE DISPOSITIVOS:
+- NUNCA recomiendes un dispositivo hasta que el alumno este identificado (es decir, hasta que hayas incluido [STUDENT_ID:X]).
+- Si todavia no sabes quien es el alumno, da consejos pedagogicos generales pero NO recomiendes dispositivo.
+- Una vez identificado el alumno, recomienda un dispositivo adecuado a sus dificultades especificas e incluye: [DEVICE_ID:X].
+
+FORMATO DE RESPUESTA (cuando el alumno esta identificado):
+  1. Reconoce la situacion brevemente
+  2. Da 2-3 sugerencias practicas e inmediatas
+  3. Recomienda un dispositivo con breve explicacion
+
+FORMATO DE RESPUESTA (cuando el alumno NO esta identificado):
+  1. Reconoce la situacion brevemente
+  2. Da 2-3 sugerencias practicas generales
+  3. Pregunta quien es el alumno
+
+"""
+
+
+@app.post("/inclusion/assist")
+async def inclusion_assist(data: InclusionAssistRequest):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # Fetch all devices
+            cur.execute("SELECT d.*, r.name as ramp_name FROM devices d JOIN ramps r ON d.ramp_id = r.id ORDER BY d.ramp_id, d.sort_order")
+            devices = cur.fetchall()
+
+            devices_catalog = json.dumps([{
+                "id": d["id"], "name": d["name"], "ramp": d["ramp_name"],
+                "needs_description": d["needs_description"],
+            } for d in devices], ensure_ascii=False)
+
+            # Fetch students with profiles (course 1 for demo)
+            cur.execute("""
+                SELECT s.id, s.name, sip.is_transitory, sip.difficulties, sip.free_description
+                FROM students s
+                LEFT JOIN student_inclusion_profiles sip ON s.id = sip.student_id
+                WHERE s.course_id = 1
+                ORDER BY s.name
+            """)
+            students = cur.fetchall()
+
+            students_context = json.dumps([{
+                "id": s["id"], "name": s["name"],
+                "difficulties": s["difficulties"] or [],
+            } for s in students], ensure_ascii=False)
+
+            system_prompt = ASSIST_SYSTEM_PROMPT.format(
+                devices_catalog=devices_catalog,
+                students_context=students_context
+            )
+
+            if data.history:
+                system_prompt += "\nYa hay conversacion previa. Responde de forma conversacional y breve. No repitas recomendaciones previas."
+
+            messages = [{"role": "system", "content": system_prompt}]
+            # Keep only last 10 messages to avoid token overflow
+            recent_history = data.history[-10:] if len(data.history) > 10 else data.history
+            for msg in recent_history:
+                messages.append({"role": msg.role, "content": msg.content})
+            messages.append({"role": "user", "content": data.message})
+
+            try:
+                ai_response = ""
+                for attempt in range(3):
+                    response = ai_client.chat.completions.create(
+                        model=AZURE_OPENAI_DEPLOYMENT,
+                        messages=messages,
+                        max_completion_tokens=2000,
+                    )
+                    choice = response.choices[0]
+                    ai_response = choice.message.content or ""
+                    finish_reason = choice.finish_reason
+                    # Log full debug info
+                    print(f"AI assist attempt {attempt+1}: finish_reason={finish_reason}, len={len(ai_response)}")
+                    print(f"AI assist response preview: {repr(ai_response[:200])}")
+                    print(f"AI assist full choice model_dump: {choice.model_dump()}")
+                    if ai_response.strip():
+                        break
+                    logger.warning(f"AI assist empty response (attempt {attempt+1}/3), retrying...")
+
+                if not ai_response.strip():
+                    return {
+                        "response": "No pude generar una respuesta. ¿Podes repetir la consulta?",
+                        "identified_student": None,
+                        "device": None,
+                    }
+
+                # Extract student ID
+                student_id_match = re.search(r'\[STUDENT_ID:(\d+)\]', ai_response)
+                identified_student = None
+                if student_id_match:
+                    sid = int(student_id_match.group(1))
+                    identified_student = next((s for s in students if s["id"] == sid), None)
+                    if identified_student:
+                        identified_student = dict(identified_student)
+
+                # Extract device ID
+                device_id_match = re.search(r'\[DEVICE_ID:(\d+)\]', ai_response)
+                recommended_device = None
+                if device_id_match:
+                    did = int(device_id_match.group(1))
+                    recommended_device = next((d for d in devices if d["id"] == did), None)
+                    if recommended_device:
+                        recommended_device = dict(recommended_device)
+
+                # Clean tags from response
+                clean_response = re.sub(r'\[STUDENT_ID:\d+\]', '', ai_response)
+                clean_response = re.sub(r'\[DEVICE_ID:\d+\]', '', clean_response).strip()
+
+                return {
+                    "response": clean_response,
+                    "identified_student": identified_student,
+                    "device": recommended_device,
+                }
+            except Exception as e:
+                logger.error(f"AI assist error: {e}")
+                raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")

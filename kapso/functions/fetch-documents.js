@@ -3,7 +3,9 @@ async function handler(request, env) {
   const areaId = body.input?.area_id;
 
   const apiBase = await env.KV.get("config:api_base_url") || "http://localhost:8000";
-  const res = await fetch(`${apiBase}/coordination-documents`);
+  const res = await fetch(`${apiBase}/coordination-documents`, {
+    headers: { "ngrok-skip-browser-warning": "true" }
+  });
 
   if (!res.ok) {
     return new Response(JSON.stringify({ vars: { documents_text: "Error al consultar documentos." } }));

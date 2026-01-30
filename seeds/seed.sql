@@ -2,12 +2,12 @@
 
 -- 2 generic coordinators
 INSERT INTO users (email, name, phone) VALUES
-    ('coordinador1@demo.edu', 'Coordinador Demo 1', '+5491112345001'),
+    ('coordinador1@demo.edu', 'Coordinador Demo 1', '+5493884869278'),
     ('coordinador2@demo.edu', 'Coordinador Demo 2', '+5491112345002');
 
 -- 3 teachers
 INSERT INTO users (email, name, phone) VALUES
-    ('docente1@escuelademo.edu', 'María González', '+5491112345003'),
+    ('docente1@escuelademo.edu', 'Juliana González', '+5491162957985'),
     ('docente2@escuelademo.edu', 'Carlos Rodríguez', '+5491112345004'),
     ('docente3@escuelademo.edu', 'Ana Martínez', '+5491112345005');
 
