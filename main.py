@@ -2,6 +2,7 @@ import os
 import re
 import json
 import copy
+import glob
 import asyncio
 import logging
 import urllib.request
@@ -15,6 +16,47 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from openai import AzureOpenAI, AsyncAzureOpenAI
+
+
+def run_migrations():
+    db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5480/av3")
+    conn = psycopg2.connect(db_url)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS _migrations (
+            filename TEXT PRIMARY KEY,
+            applied_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("SELECT filename FROM _migrations")
+    applied = {row[0] for row in cur.fetchall()}
+    base = os.path.join(os.path.dirname(__file__), "migrations")
+    for f in sorted(glob.glob(os.path.join(base, "*.sql"))):
+        name = os.path.basename(f)
+        if name not in applied:
+            print(f"  Applying migration: {name}")
+            with open(f) as sql:
+                cur.execute(sql.read())
+            cur.execute("INSERT INTO _migrations (filename) VALUES (%s)", (name,))
+    # Run seeds only if DB is fresh (no users yet)
+    cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='users')")
+    if cur.fetchone()[0]:
+        cur.execute("SELECT COUNT(*) FROM users")
+        if cur.fetchone()[0] == 0:
+            seeds_base = os.path.join(os.path.dirname(__file__), "seeds")
+            for f in sorted(glob.glob(os.path.join(seeds_base, "*.sql"))):
+                print(f"  Seeding: {os.path.basename(f)}")
+                with open(f) as sql:
+                    try:
+                        cur.execute(sql.read())
+                    except Exception as e:
+                        print(f"  Seed warning: {e}")
+    cur.close()
+    conn.close()
+    print("Migrations complete.")
+
+run_migrations()
 
 app = FastAPI(title="Annual Planning API", version="0.1.0")
 
