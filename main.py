@@ -4219,7 +4219,7 @@ async def inclusion_assist(data: InclusionAssistRequest, course_id: int = Query(
                         messages=messages,
                         tools=INCLUSION_ASSIST_TOOLS,
                         tool_choice="auto",
-                        max_completion_tokens=2000,
+                        max_completion_tokens=8000,
                     )
                     choice = response.choices[0]
                     msg = choice.message
@@ -4269,7 +4269,7 @@ async def inclusion_assist(data: InclusionAssistRequest, course_id: int = Query(
                     response = ai_client.chat.completions.create(
                         model=AZURE_OPENAI_DEPLOYMENT,
                         messages=messages,
-                        max_completion_tokens=2000,
+                        max_completion_tokens=8000,
                     )
                     ai_response = response.choices[0].message.content or ""
 
