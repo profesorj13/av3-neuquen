@@ -237,7 +237,7 @@ INSERT INTO devices (
     observable_manifestations, pedagogical_situations, material_class,
     frequent_profile, specific_profile, needs_description, qr_code
 ) VALUES
-  (2, 'Soporte para lapiz 2 — etapa 3', 3, 10, 21,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Soporte para lapiz 2 — etapa 3', 3, 10, 21,
    'Soporte adaptador de lapiz progresivo (etapa 3). Mejora la prension y favorece la postura adecuada.',
    'Mejora la prension del lapiz. Favorece la postura adecuada. Facilita el control del trazo. Reduce el esfuerzo en la escritura.',
    ARRAY['Sostiene mal el lapiz','Hace mucha fuerza al escribir','Se le cae el lapiz','Se cansa rapido al escribir','La letra es poco legible','Le cuesta controlar el trazo'],
@@ -247,7 +247,7 @@ INSERT INTO devices (
    ARRAY['paralisis cerebral','sindrome de Down','TEA con apoyo notable','Disgrafia','TDAH'],
    'Acompana a estudiantes que necesitan apoyo intermedio para sostener el lapiz, con mayor sosten que la etapa 4.',
    'DEVICE-SLA-003'),
-  (2, 'Soporte para lapiz 3 — etapa 2', 2, 5, 22,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Soporte para lapiz 3 — etapa 2', 2, 5, 22,
    'Soporte adaptador de lapiz progresivo (etapa 2).',
    'Mejora la prension del lapiz. Favorece la postura adecuada. Facilita el control del trazo. Reduce el esfuerzo en la escritura.',
    ARRAY['Sostiene mal el lapiz','Hace mucha fuerza al escribir','Se le cae el lapiz','Se cansa rapido al escribir','La letra es poco legible','Le cuesta controlar el trazo'],
@@ -257,7 +257,7 @@ INSERT INTO devices (
    ARRAY['paralisis cerebral','sindrome de Down','TEA con apoyo notable','TEA con mayor necesidad de apoyo','Disgrafia'],
    'Acompana a estudiantes con mayor necesidad de sosten que la etapa 3.',
    'DEVICE-SLA-002'),
-  (2, 'Soporte para lapiz 4 — etapa 1', 1, 5, 23,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Soporte para lapiz 4 — etapa 1', 1, 5, 23,
    'Soporte adaptador de lapiz progresivo (etapa 1, mayor sosten).',
    'Mejora la prension del lapiz. Favorece la postura adecuada. Facilita el control del trazo. Reduce el esfuerzo en la escritura.',
    ARRAY['Sostiene mal el lapiz','Hace mucha fuerza al escribir','Se le cae el lapiz','Se cansa rapido al escribir','La letra es poco legible','Le cuesta controlar el trazo'],
@@ -275,7 +275,7 @@ INSERT INTO devices (
     observable_manifestations, pedagogical_situations, material_class,
     frequent_profile, specific_profile, needs_description, qr_code
 ) VALUES
-  (2, 'Pesas para lapices', NULL, 10, 24,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Pesas para lapices', NULL, 10, 24,
    'Pesas que se colocan sobre el lapiz para aumentar la estabilidad de la mano.',
    'Aumenta la estabilidad de la mano durante la escritura. Disminuye movimientos excesivos. Favorece el control del trazo. Mejora la precision.',
    ARRAY['Mueve mucho la mano al escribir','El trazo es inestable','Escribe con movimientos bruscos','Le cuesta controlar el lapiz','Cambia constantemente la posicion de la mano'],
@@ -293,7 +293,7 @@ INSERT INTO devices (
     observable_manifestations, pedagogical_situations, material_class,
     frequent_profile, specific_profile, needs_description, qr_code
 ) VALUES
-  (2, 'Tijera adaptada — etapa 2', 2, 1, 25,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Tijera adaptada — etapa 2', 2, 1, 25,
    'Tijera adaptada con mayor asistencia mecanica (etapa 2).',
    'Facilita el uso funcional de la tijera. Permite el control del movimiento de corte. Reduce el esfuerzo en tareas de recorte.',
    ARRAY['No puede usar la tijera convencional','Tiene movimientos bruscos','No puede sostener la tijera','No puede usar las manos','Necesita ayuda para recortar'],
@@ -311,7 +311,7 @@ INSERT INTO devices (
     observable_manifestations, pedagogical_situations, material_class,
     frequent_profile, specific_profile, needs_description, qr_code
 ) VALUES
-  (2, 'Ayuda para la lectura — Reglas de lectura transparente con renglon — etapa 4', 4, 10, 26,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Ayuda para la lectura — Reglas de lectura transparente con renglon — etapa 4', 4, 10, 26,
    'Regla de lectura transparente con renglon resaltado (etapa 4 — ultima, mayor autonomia).',
    'Facilita el seguimiento visual del texto. Favorece la organizacion de la lectura. Facilita el acceso al contenido escrito.',
    ARRAY['Salta la linea al leer','Se desorienta en el texto','Lee muy lento','Se cansa al leer','Le cuesta seguir la lectura'],
@@ -329,7 +329,7 @@ INSERT INTO devices (
     observable_manifestations, pedagogical_situations, material_class,
     frequent_profile, specific_profile, needs_description, qr_code
 ) VALUES
-  (2, 'Panel separador de pupitre', NULL, 1, 27,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Panel separador de pupitre', NULL, 1, 27,
    'Panel que se coloca alrededor del pupitre para reducir estimulos visuales del entorno.',
    'Reduce estimulos visuales del entorno. Disminuye distractores. Favorece la concentracion en la tarea.',
    ARRAY['Se distrae con lo que sucede alrededor','Pierde el foco con facilidad','Le cuesta concentrarse en su tarea','Pierde la atencion','Le molesta el entorno'],
@@ -339,7 +339,7 @@ INSERT INTO devices (
    ARRAY['TDAH','TEA con apoyo leve','TEA con apoyo notable','alto potencial intelectual','Dislexia'],
    'Acompana a estudiantes que se sobreestimulan con el entorno y necesitan reducir distractores visuales.',
    'DEVICE-PSP-001'),
-  (2, 'Organizador de tareas personalizable', NULL, 4, 28,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Organizador de tareas personalizable', NULL, 4, 28,
    'Organizador visual configurable para estructurar la secuencia de actividades.',
    'Estructura la secuencia de actividades. Facilita la planificacion de la tarea. Mejora la organizacion personal. Reduce la ansiedad.',
    ARRAY['Olvida lo que tiene que hacer','No sabe por donde empezar','Deja tareas sin terminar','Se desorganiza facilmente','Pierde materiales','Le cuesta seguir una secuencia'],
@@ -349,7 +349,7 @@ INSERT INTO devices (
    ARRAY['Dislexia','Disgrafia','sindrome de Down','TDAH','TEA con apoyo leve','TEA con apoyo notable'],
    'Acompana a estudiantes con dificultades de organizacion y planificacion temporal.',
    'DEVICE-ORG-001'),
-  (2, 'Mesa plegable portatil', NULL, 1, 29,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Mesa plegable portatil', NULL, 1, 29,
    'Mesa plegable portatil para favorecer la concentracion generando un espacio individual.',
    'Reduce la exposicion a estimulos del entorno. Genera un espacio de trabajo con menor distraccion. Favorece la concentracion.',
    ARRAY['Se distrae con lo que sucede alrededor','Pierde el foco con facilidad','Le cuesta concentrarse en su tarea','Se sobreestimula facilmente','Busca lugares tranquilos para trabajar'],
@@ -367,7 +367,7 @@ INSERT INTO devices (
     observable_manifestations, pedagogical_situations, material_class,
     frequent_profile, specific_profile, needs_description, qr_code
 ) VALUES
-  (2, 'Sacapuntas para zurdos', NULL, 1, 41,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Sacapuntas para zurdos', NULL, 1, 41,
    'Sacapuntas con orientacion adaptada para zurdos.',
    NULL,
    ARRAY['Se cansa al sacar punta','Le cuesta usar el sacapuntas','Necesita herramientas para zurdos'],
@@ -377,7 +377,7 @@ INSERT INTO devices (
    ARRAY[]::text[],
    'Acompana a estudiantes zurdos que se frustran con sacapuntas convencionales.',
    'DEVICE-ZUR-001'),
-  (2, 'Lapicera para zurdos', NULL, 1, 42,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Lapicera para zurdos', NULL, 1, 42,
    'Lapicera ergonomica para zurdos.',
    NULL,
    ARRAY['Mancha el cuaderno al escribir','Le cuesta sostener la lapicera','Necesita herramientas para zurdos'],
@@ -387,7 +387,7 @@ INSERT INTO devices (
    ARRAY[]::text[],
    'Acompana a estudiantes zurdos en actividades de escritura prolongada.',
    'DEVICE-ZUR-002'),
-  (2, 'Tijera para zurdos', NULL, 1, 43,
+  ((SELECT id FROM ramps WHERE name='Rampa Didactico-Pedagogica'), 'Tijera para zurdos', NULL, 1, 43,
    'Tijera con orientacion adaptada para zurdos.',
    NULL,
    ARRAY['Le cuesta cortar con tijera convencional','Necesita herramientas para zurdos'],
@@ -405,7 +405,7 @@ INSERT INTO devices (
     observable_manifestations, pedagogical_situations, material_class,
     frequent_profile, specific_profile, needs_description, qr_code
 ) VALUES
-  (1, 'Mouse Admouse', NULL, 1, 11,
+  ((SELECT id FROM ramps WHERE name='Rampa Digital'), 'Mouse Admouse', NULL, 1, 11,
    'Mouse adaptativo de gran formato. Pensado para acceso motor y cognitivo simplificado.',
    'Facilita el control del cursor sin desplazamiento del dispositivo. Mejora la precision del movimiento. Reduce la exigencia motora fina. Favorece la autonomia.',
    ARRAY['No logra usar mouse convencional','No entiende los comandos','Le cuesta orientarse en el espacio','Le cuesta identificar los botones','Le cuesta controlar el movimiento','Necesita movimientos mas amplios','Se frustra con dispositivos pequenos'],
@@ -423,7 +423,7 @@ INSERT INTO devices (
     observable_manifestations, pedagogical_situations, material_class,
     frequent_profile, specific_profile, needs_description, qr_code
 ) VALUES
-  (3, 'Munequera sensorial x2', NULL, 2, 31,
+  ((SELECT id FROM ramps WHERE name='Rampa de Autorregulacion Sensorial'), 'Munequera sensorial x2', NULL, 2, 31,
    'Par de munequeras sensoriales con peso liviano que aportan estabilidad propioceptiva.',
    'Aumenta la estabilidad de la mano durante la escritura. Disminuye movimientos excesivos. Favorece el control del trazo.',
    ARRAY['Mueve mucho la mano al escribir','El trazo es inestable','Escribe con movimientos bruscos','Le cuesta controlar el lapiz','Cambia constantemente la posicion de la mano'],
@@ -433,7 +433,7 @@ INSERT INTO devices (
    ARRAY['Disgrafia','TDAH','paralisis cerebral','sindrome de Down'],
    'Acompana a estudiantes con trazo inestable que se benefician de input propioceptivo.',
    'DEVICE-MUN-001'),
-  (3, 'Material sensorial de apriete SPEKS', NULL, 6, 32,
+  ((SELECT id FROM ramps WHERE name='Rampa de Autorregulacion Sensorial'), 'Material sensorial de apriete SPEKS', NULL, 6, 32,
    'Set de bolitas magneticas SPEKS para canalizar la necesidad de movimiento manual.',
    'Canaliza la necesidad de movimiento manual. Favorece la autorregulacion durante la tarea. Reduce la inquietud motora.',
    ARRAY['Se inquieta constantemente','Necesita manipular objetos','Lleva objetos a la boca','Se muerde las unas','Le cuesta quedarse quieto','Se distrae con facilidad','Busca estimulos con las manos','Se pone ansioso durante la tarea'],
@@ -443,7 +443,7 @@ INSERT INTO devices (
    ARRAY['TDAH','TEA con apoyo leve','Dislexia','alto potencial intelectual'],
    'Acompana a estudiantes que necesitan manipular objetos para sostener la atencion.',
    'DEVICE-SPK-001'),
-  (3, 'Material sensorial de apriete SPEKS con textura', NULL, 2, 33,
+  ((SELECT id FROM ramps WHERE name='Rampa de Autorregulacion Sensorial'), 'Material sensorial de apriete SPEKS con textura', NULL, 2, 33,
    'Variante con textura del SPEKS, para input sensorial adicional.',
    'Canaliza la necesidad de movimiento manual. Favorece la autorregulacion durante la tarea. Reduce la inquietud motora.',
    ARRAY['Se inquieta constantemente','Necesita manipular objetos','Lleva objetos a la boca','Se muerde las unas','Le cuesta quedarse quieto','Se distrae con facilidad','Busca estimulos con las manos','Se pone ansioso durante la tarea'],
@@ -453,7 +453,7 @@ INSERT INTO devices (
    ARRAY['TDAH','TEA con apoyo leve','Dislexia','alto potencial intelectual'],
    'Para estudiantes que necesitan input sensorial adicional al SPEKS estandar.',
    'DEVICE-SPK-002'),
-  (3, 'Pelota para el pie (vaiven) o muslo (presion)', NULL, 3, 34,
+  ((SELECT id FROM ramps WHERE name='Rampa de Autorregulacion Sensorial'), 'Pelota para el pie (vaiven) o muslo (presion)', NULL, 3, 34,
    'Pelota que se usa apoyada en el pie (vaiven) o bajo el muslo (presion) para canalizar movimiento sin abandonar la tarea.',
    'Permite el movimiento sin abandonar la tarea. Canaliza la inquietud motora. Favorece la permanencia en el lugar.',
    ARRAY['Mueve constantemente las piernas','Se levanta de la silla','No logra quedarse sentado','Necesita moverse mientras trabaja','Se inquieta durante la actividad'],
@@ -463,7 +463,7 @@ INSERT INTO devices (
    ARRAY['TDAH','TEA con apoyo notable','alto potencial intelectual','Dislexia'],
    'Acompana a estudiantes que necesitan canalizar el movimiento de piernas para sostener la atencion.',
    'DEVICE-PEP-001'),
-  (3, 'BouncyBand Sit & Twist Cojin de Asiento Activo', NULL, 1, 35,
+  ((SELECT id FROM ramps WHERE name='Rampa de Autorregulacion Sensorial'), 'BouncyBand Sit & Twist Cojin de Asiento Activo', NULL, 1, 35,
    'Cojin de asiento activo que permite movimiento controlado en la silla.',
    'Permite el movimiento controlado en la silla. Reduce la necesidad de levantarse. Favorece la autorregulacion motora.',
    ARRAY['Se balancea en la silla','Se levanta con frecuencia','Mueve constantemente el cuerpo','Le cuesta permanecer en su lugar','Interrumpe la tarea por movimiento','Pierde la atencion con facilidad'],
