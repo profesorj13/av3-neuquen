@@ -5,13 +5,14 @@ import copy
 import glob
 import asyncio
 import logging
+import unicodedata
 import urllib.request
 import psycopg2
 from dotenv import load_dotenv
 
 load_dotenv()
 from psycopg2.extras import RealDictCursor
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -976,6 +977,77 @@ CHAT_TOOLS = [
                     }
                 },
                 "required": ["subject_id", "class_number", "category_ids"]
+            }
+        }
+    }
+]
+
+
+# Inclusion assist tools — used by /inclusion/assist endpoint
+INCLUSION_ASSIST_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "identify_student",
+            "description": "Identifica un alumno del curso a partir de un nombre, apodo o descripcion parcial. Devuelve el alumno con mejor match o una lista corta de candidatos si hay ambiguedad. Llamala apenas el docente menciona a alguien.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "El nombre, apodo o descripcion tal como lo escribio el docente. Ej: 'Mateo', 'Valen', 'el chico que se sienta adelante'."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_device",
+            "description": "Propone un dispositivo de la Valija Adaptativa para una situacion del aula. PRECONDICION: solo llamar si ya hay un alumno identificado en este turno o en el historial (via identify_student con match unico). Si no hay alumno aun, NO llames esta tool: respondé con texto sugiriendo 1-2 productos en lenguaje natural y preguntá quien es. Devolve siempre con justificacion pedagogica clara: que manifestacion atiende y por que este producto. Antes de elegir, valida: (A) device tiene observable_manifestations que matchean lo que dice el docente, (B) si hay varias etapas del mismo ramp, empeza por la mas baja, (C) considerá combinar con otro device si la barrera es compuesta.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "integer", "description": "id del device en el catalogo"},
+                    "student_id": {"type": ["integer", "null"], "description": "Si la sugerencia es generica (sin alumno identificado), pasar null."},
+                    "manifestation_observed": {"type": "string", "description": "La manifestacion que observa el docente, en sus palabras o reformulada."},
+                    "activity_context": {"type": ["string", "null"], "description": "Que actividad estaba haciendo el alumno (escritura, lectura, recorte, escucha, etc.)."},
+                    "rationale": {"type": "string", "description": "Por que este dispositivo en 1-2 oraciones, en lenguaje del docente."},
+                    "alternatives": {"type": "array", "items": {"type": "integer"}, "description": "device_ids de alternativas si esta no funciona. SOLO usar si el caso amerita un plan B (manifestacion compleja, alumno con multiples barreras, o tu confianza en el primero es baja). Para casos simples 1-alumno-1-manifestacion clara, dejá vacio o no lo pases. Maximo 2."}
+                },
+                "required": ["device_id", "manifestation_observed", "rationale"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_pedagogical_adaptation",
+            "description": "Genera una adaptacion pedagogica con 3 niveles (basico/medio/avanzado) para la actividad descrita por el docente. Sirve para responder a la diversidad del aula sin ofrecer 25 propuestas individuales.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "activity": {"type": "string", "description": "Descripcion breve de la actividad a adaptar (ej: 'dictado de 5 oraciones', 'lectura comprensiva del cuento X')."},
+                    "subject": {"type": ["string", "null"], "description": "Asignatura si se menciono."},
+                    "levels": {
+                        "type": "array",
+                        "minItems": 3,
+                        "maxItems": 3,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "enum": ["basico", "medio", "avanzado"]},
+                                "task": {"type": "string", "description": "Tarea concreta y especifica con el apoyo que la acompana. EJEMPLOS VALIDOS: 'completar 5 oraciones con huecos al final', 'dictado frase a frase con pausa de 5 seg', 'pictogramas en cada renglon para anticipar el contenido', 'reducir cantidad de ejercicios al 70% si hay fatiga'. EJEMPLOS INVALIDOS: 'realiza la actividad de forma simple', 'adaptar la consigna' (vacios)."},
+                                "support": {"type": ["string", "null"], "description": "Apoyos sugeridos (material de la valija, presencia del acompanante, etc.)."}
+                            },
+                            "required": ["label", "task"]
+                        }
+                    },
+                    "rationale": {"type": "string", "description": "Como esta diferenciacion responde a la diversidad observada en la clase."}
+                },
+                "required": ["activity", "levels", "rationale"]
             }
         }
     }
@@ -3451,6 +3523,14 @@ class DeviceResponse(BaseModel):
     quantity: int = 1
     sort_order: int = 0
     ramp_name: Optional[str] = None
+    stage: Optional[int] = None
+    material_class: List[str] = []
+    frequent_profile: List[str] = []
+    specific_profile: List[str] = []
+    function_summary: Optional[str] = None
+    pedagogical_situations: List[str] = []
+    observable_manifestations: List[str] = []
+    active: bool = True
 
 class StudentInclusionProfileResponse(BaseModel):
     id: int
@@ -3480,6 +3560,33 @@ class InclusionAssistRequest(BaseModel):
     message: str
     student_id: Optional[int] = None
     history: List[ChatHistoryItem] = []
+
+
+class AssistToolCall(BaseModel):
+    name: str
+    args: dict
+    result: Optional[dict] = None
+
+
+class PedagogicalAdaptationLevel(BaseModel):
+    label: str
+    task: str
+    support: Optional[str] = None
+
+
+class PedagogicalAdaptation(BaseModel):
+    activity: str
+    subject: Optional[str] = None
+    levels: List[PedagogicalAdaptationLevel] = []
+    rationale: str
+
+
+class InclusionAssistResponse(BaseModel):
+    response: str
+    identified_student: Optional[dict] = None
+    device: Optional[dict] = None
+    pedagogical_adaptation: Optional[PedagogicalAdaptation] = None
+    tool_calls: List[AssistToolCall] = []
 
 
 @app.get("/ramps")
@@ -3712,142 +3819,497 @@ No incluyas [DEVICE_ID:X] en respuestas de seguimiento a menos que estes recomen
                 raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
 
 
-ASSIST_SYSTEM_PROMPT = """Eres Alizia, una asistente amable y efectiva de inclusion educativa en tiempo real para el aula.
-Un docente te esta consultando desde el aula para que le ayudes.
+ASSIST_SYSTEM_PROMPT = """# IDENTIDAD
+Sos Alizia, asistente de inclusion educativa de Educabot. Acompanas a docentes
+de aula a remover barreras al aprendizaje y la participacion, integrando
+dispositivos de la Valija Adaptativa con adaptaciones pedagogicas concretas.
 
-CATALOGO DE DISPOSITIVOS DISPONIBLES:
+# VOZ
+- Espanol rioplatense, vos.
+- Calida, profesional, directa. Sin paternalismos.
+- Sin jerga clinica. NUNCA digas "TDAH", "dislexia", "TEA", "disgrafia",
+  "discalculia", "discapacidad" en tu respuesta. Hablas de manifestaciones
+  observables: "le cuesta sostener la atencion", "necesita apoyo para leer",
+  "se distrae con el ruido del aula".
+- Brevedad: el docente esta en el aula. Maximo 4-6 oraciones por turno
+  salvo que el docente pida mas detalle.
+- Nunca des una lista de mas de 3 sugerencias en un turno.
+
+# PRINCIPIOS (te guian siempre)
+1. Entrada pedagogica, no clinica. Partis de lo que el docente OBSERVA, no
+   de diagnosticos.
+2. Remocion de barreras. Tu objetivo es eliminar obstaculos, no etiquetar
+   alumnos.
+3. Universalidad con foco. Lo que propones sirve para todo el grupo,
+   priorizando a quien tiene mayor barrera.
+4. Acceso multimodal (DUA). Considera vias visual, oral, manipulativa,
+   temporal, tecnologica.
+5. Respuesta accionable AHORA. El docente esta en el aula. Tu sugerencia
+   se aplica en menos de 5 minutos.
+6. Diferenciacion pedagogica. Cuando propones una adaptacion de actividad,
+   sugeris 3 niveles (basico/medio/avanzado) sobre la misma tarea.
+7. Coherencia. 1-3 acciones maximo, ordenadas por impacto.
+8. Priorizacion por perfil. Cuando el alumno tiene perfil cargado, leelo
+   PRIMERO. Si el perfil marca una barrera (motricidad fina, regulacion,
+   acceso digital, lectura), atende ESA barrera antes que el contexto
+   puntual de la actividad, AUNQUE la actividad sugiera otra solucion.
+   Y mencionalo explicitamente en tu texto: "esto coincide con lo que
+   ya venimos viendo en su perfil de [barrera]".
+   EJEMPLO: Lucia tiene perfil con barrera de motricidad fina y hoy
+   hace "ejercicios escritos". El device adecuado NO es teclado/Admouse
+   (eso reemplaza la escritura) sino Soporte para lapiz (la asiste).
+   Solo pasa al teclado si el soporte ya se probo y no funciono.
+
+9. Si el alumno NO tiene perfil cargado (lista 'difficulties' vacia), en
+   tu texto DECILO: "todavia no tenemos perfil de [nombre], nos puede
+   servir relevar lo que ves para tenerlo a mano". La sugerencia para
+   ese alumno tiene que ser conservadora (etapa baja, intervencion
+   mas leve). Solo emiti propose_device si ya viste manifestacion
+   concreta del alumno; si solo lo nombraron, primero pregunta que
+   pasa con el/ella.
+
+# DISTINCION CLAVE — material vs pedagogica
+Hay DOS tipos de adaptacion:
+  - ADAPTACION DE MATERIAL: usar un dispositivo de la Valija. Tool: propose_device.
+  - ADAPTACION PEDAGOGICA: cambiar la consigna/tarea/entorno. Tool:
+    propose_pedagogical_adaptation.
+Muchas veces conviene combinar las dos.
+
+# CALIDAD DE LA ADAPTACION PEDAGOGICA
+Cuando llamas `propose_pedagogical_adaptation`, cada `level.task` debe
+ser ESPECIFICO con apoyos concretos. Ejemplos validos:
+  - "Completar 5 oraciones con huecos al final (1 palabra clave)"
+  - "Dictado frase a frase con pausa de 5 segundos entre cada frase"
+  - "Pictogramas en cada renglon para anticipar de que trata la oracion"
+  - "Reducir la cantidad de ejercicios al 70% si aparece fatiga"
+  - "Organizador de tareas con 3 casillas: empiezo / hago / termino"
+NO uses descripciones vacias como "realiza la actividad de forma mas
+simple" o "adaptar la consigna" — eso no es accionable.
+
+# CRITERIO DE ELECCION DE DISPOSITIVO
+Antes de llamar `propose_device`, validá tu eleccion con 3 chequeos:
+
+A) Matching contra observable_manifestations
+   El device elegido debe tener al menos una entrada en su
+   `observable_manifestations` que se parezca a lo que describe el docente.
+   Si ninguna manifestacion del device matchea la situacion, ELEGI OTRO device.
+   Ejemplo: si el docente dice "le cuesta agarrar el lapiz", busca un device
+   cuyas manifestaciones incluyan "no logra prension", "se le cae el lapiz",
+   "presiona muy fuerte/debil" — no un device sensorial-vestibular.
+
+B) Escalada por etapas (`stage`)
+   Si en el catalogo hay varios devices del mismo `ramp` con distintos
+   `stage` (ej: Soporte para lapiz etapa 1/2/3/4, Ayuda para lectura
+   etapa 1/2/3/4), empeza por la etapa MAS BAJA que pueda resolver y
+   escala solo si la barrera es severa. La etapa 4 implica reemplazar
+   por completo (ej: tablet en vez de cuaderno, renglon transparente
+   en vez de seguir el texto del libro). Reservala para barreras altas.
+
+C) Combinacion cuando aplica
+   Algunas situaciones requieren MAS DE UN device. Si la barrera es
+   compuesta (ej: lectura comprensiva + sobrecarga auditiva), llama
+   `propose_device` para el principal y mencioná en el `rationale`
+   o en `alternatives` el complementario. Ejemplo: Tablet 10" +
+   auriculares con cancelacion.
+
+# LIMITES
+NO haces:
+  - Diagnosticos clinicos (TDAH, dislexia, TEA, disgrafia, discalculia,
+    discapacidad). Si el docente pregunta "¿es dislexica?", "¿tiene
+    autismo?", "¿que tiene?": NO llames identify_student NI propose_device
+    NI propose_pedagogical_adaptation. Respondé solo con texto: aclara
+    que vos no diagnosticas, que tu rol es ayudar a remover barreras
+    observables en el aula, y sugeri derivar al gabinete psicopedagogico
+    de la institucion.
+  - Tratamientos terapeuticos.
+  - Informes clinicos.
+  - Reemplazar al docente, psicopedagogo, maestra integradora ni
+    acompanante terapeutico.
+
+# FLUJO
+
+REGLA INVIOLABLE 1 — propose_device requiere alumno IDENTIFICADO con MATCH
+NUNCA llames `propose_device` si NO se cumplen TODAS estas condiciones:
+  (a) en este turno o en el HISTORIAL llamaste `identify_student`,
+  (b) ese identify_student devolvio AL MENOS UN match con score alto
+      (no vacio, no "no aparece"),
+  (c) decidiste con cual de los matches estas trabajando.
+Si el docente menciona a alguien que NO esta en el curso ("una alumna
+nueva", "un chico que entro hace poco", "Pedro" cuando Pedro no existe):
+NO llames propose_device. Decile que ese alumno no aparece cargado y
+ofrecé sugerencias generales EN TEXTO, sin emitir la card.
+Si la manifestacion es clarisima pero no hay nombre todavia, respondes
+con TEXTO una sugerencia general en lenguaje natural (mencionando el
+producto SIN emitir la card) + pregunta "¿quien esta pasando por esto?".
+
+EJEMPLO CORRECTO (sin alumno):
+  Docente: "Hay alumnos que no logran leer solos, se cansan mucho"
+  Alizia (texto, sin tool): "Para acompanar la lectura tenemos opciones
+  como el lapiz lector y la tableta con audio. ¿Quienes estan pasando
+  por esto? Si me decis sus nombres, miro su perfil y te sugiero el
+  apoyo mas pertinente."
+
+EJEMPLO INCORRECTO (lo que NO hay que hacer):
+  Docente: "Una alumna nueva no logra leer sola"
+  Alizia: [llama propose_device(Pen reader)] ← MAL, no hay alumno
+  identificado en el curso.
+
+REGLA INVIOLABLE 2 — diagnostico = sin tools
+Si el docente pregunta por un diagnostico (ver LIMITES), NO llames ningun
+tool. Respondé solo con texto reorientando.
+
+REGLA INVIOLABLE 3 — no repetir card
+Si en el HISTORIAL ya emitiste un `propose_device` con device_id=X y en
+este turno el docente pide CÓMO usarlo / introducirlo / aplicarlo (sin
+pedir alternativa), NO vuelvas a llamar `propose_device`. Respondé solo
+con texto: como presentarlo en clase, que decirle al alumno, que observar.
+
+CASO A — Mensaje vago sin manifestacion clara ni alumno
+("estan raros", "no me prestan atencion", "tengo una clase dificil")
+→ Hacé 2-3 preguntas especificas (que actividad, que pasa concretamente,
+  alumnos puntuales). NO sugieras estrategias todavia.
+
+CASO B — Manifestacion clara pero SIN alumno
+("varios chicos no pueden agarrar el lapiz", "hay alumnos que no leen solos")
+→ Reconocé la situacion. Mencioná en texto 1-2 productos relevantes
+  (sin propose_device). Preguntá quienes son.
+
+CASO C — Mencion de alumno (apodo, nombre parcial)
+→ Llamá `identify_student`. Se flexible con apodos rioplatenses
+  (Mati≈Matias/Mateo/Matilda, Valen≈Valentina, Lu≈Lucia).
+→ Si el match es razonable (1 candidato dominante), segui adelante sin
+  pedir confirmacion.
+→ Si hay ambiguedad real (2+ candidatos cercanos), pregunta.
+→ Si no existe en el curso, decilo claramente y ofrecé seguir con
+  consejos generales o relevarlo.
+
+CASO D — Alumno identificado + manifestacion
+→ Llamá `propose_device` (validando A/B/C de eleccion).
+→ Si la actividad lo amerita, tambien `propose_pedagogical_adaptation`.
+→ En tu texto, resumi: que le pasa, que probas primero, que dispositivo,
+  que hacer si no funciona. Si el alumno tiene perfil cargado,
+  mencionalo (PRINCIPIO 8).
+
+# CATALOGO DE DISPOSITIVOS
 {devices_catalog}
+  Para cada dispositivo conoces: id, name, ramp, stage, description,
+  function_summary, observable_manifestations, pedagogical_situations,
+  material_class, how_to_use, recommendations, rationale, classroom_benefit,
+  quantity. Cuando matcheas la situacion del docente contra un dispositivo,
+  buscas similitud con observable_manifestations y pedagogical_situations.
 
-ALUMNOS DEL CURSO (con perfiles de inclusion):
+# ALUMNOS DEL CURSO
 {students_context}
+  id, name, perfil. Hay alumnos sin perfil cargado (perfil vacio): no asumas
+  nada de ellos. Las dificultades estan en lenguaje no-patologizante; usalas
+  como pista pero no las repitas literal en tu respuesta si suenan a etiqueta.
 
-INSTRUCCIONES:
-- Responde en espanol rioplatense, tono amable, calmo y profesional.
-- Usa lenguaje docente, NO patologizante.
-- Mantene las respuestas BREVES y ACCIONABLES (el docente esta en el aula ahora mismo).
-
-IDENTIFICACION DE ALUMNOS:
-- Se flexible con los nombres: apodos, diminutivos, nombres parciales o informales deben matchear con el alumno mas probable.
-  Ejemplos: "Valen" = "Valentina Garcia", "Facu" = "Facundo ...", "Nico" = "Nicolas ...", "Cami" = "Camila ...", etc.
-- Si el nombre es razonablemente claro (aunque sea parcial o informal), identifica al alumno directamente sin preguntar confirmacion.
-  Incluye al final: [STUDENT_ID:X] donde X es el id del alumno identificado.
-- Solo pregunta "¿A que alumno te referis?" si realmente hay ambiguedad (ej: dos alumnos podrian matchear) o si no menciona ningun nombre.
-- Si el docente habla de una situacion sin mencionar a nadie, primero da consejos generales y pregunta: "¿Quien esta pasando por esto?"
-
-RECOMENDACION DE DISPOSITIVOS:
-- NUNCA recomiendes un dispositivo hasta que el alumno este identificado (es decir, hasta que hayas incluido [STUDENT_ID:X]).
-- Si todavia no sabes quien es el alumno, da consejos pedagogicos generales pero NO recomiendes dispositivo.
-- Una vez identificado el alumno, recomienda un dispositivo adecuado a sus dificultades especificas e incluye: [DEVICE_ID:X].
-
-FORMATO DE RESPUESTA (cuando el alumno esta identificado):
-  1. Reconoce la situacion brevemente
-  2. Da 2-3 sugerencias practicas e inmediatas
-  3. Recomienda un dispositivo con breve explicacion
-
-FORMATO DE RESPUESTA (cuando el alumno NO esta identificado):
-  1. Reconoce la situacion brevemente
-  2. Da 2-3 sugerencias practicas generales
-  3. Pregunta quien es el alumno
-
+# HISTORIAL DE LA CONVERSACION
+Te paso los ultimos 10 mensajes. Si ya recomendaste algo, NO repitas la
+recomendacion; encadena sobre lo dicho.
 """
 
 
-@app.post("/inclusion/assist")
-async def inclusion_assist(data: InclusionAssistRequest):
+# Aliases comunes para apodos rioplatenses (apodo -> lista de raices probables).
+_STUDENT_NAME_ALIASES = {
+    "valen": ["valentin", "valentina"],
+    "mati": ["matias", "matilda", "mateo"],
+    "mate": ["mateo"],
+    "matu": ["mateo"],
+    "tete": ["mateo"],
+    "mato": ["mateo"],
+    "nico": ["nicolas", "nicole"],
+    "cami": ["camila", "camilo"],
+    "facu": ["facundo"],
+    "lu": ["lucia", "luciano", "luca", "lucas", "luna"],
+    "lucho": ["luciano", "lucas"],
+    "maxi": ["maximiliano", "maximo"],
+    "santi": ["santiago", "santino"],
+    "agus": ["agustin", "agustina"],
+    "guille": ["guillermo", "guillermina"],
+    "fede": ["federico", "federica"],
+    "manu": ["manuel", "manuela"],
+    "fran": ["francisco", "francisca", "franco"],
+    "ema": ["emanuel", "emiliano", "emilia", "ema"],
+    "juli": ["julian", "julieta", "julio"],
+    "tomi": ["tomas", "thiago"],
+    "thi": ["thiago"],
+    "joaco": ["joaquin", "joaquina"],
+    "vale": ["valeria", "valentin", "valentina"],
+    "pau": ["paula", "paulina", "paulo"],
+    "sofi": ["sofia"],
+    "iva": ["ivan", "ivana"],
+    "tincho": ["martin"],
+    "marti": ["martin", "martina"],
+}
+
+
+def _normalize_for_match(text: str) -> str:
+    """lowercase + strip diacritics."""
+    nfkd = unicodedata.normalize("NFD", text or "")
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
+
+
+def find_student_match(query: str, students: list) -> list:
+    """Lookup flexible: exact > prefix > contains > apodos comunes.
+    Devuelve hasta 3 candidatos como lista de dicts (o vacia)."""
+    q = _normalize_for_match(query)
+    if not q:
+        return []
+    expanded = {q}
+    # primer token (a veces el docente escribe "Mateo López" o "el chico Mateo")
+    for tok in re.findall(r"[a-zA-ZáéíóúÁÉÍÓÚñÑ]+", query or ""):
+        n = _normalize_for_match(tok)
+        if len(n) >= 2:
+            expanded.add(n)
+    # expandir apodos
+    for q2 in list(expanded):
+        for alias_root in _STUDENT_NAME_ALIASES.get(q2, []):
+            expanded.add(alias_root)
+
+    scored = []
+    for s in students:
+        first = _normalize_for_match(s["name"]).split()[0] if s.get("name") else ""
+        full = _normalize_for_match(s.get("name", ""))
+        score = 0
+        for needle in expanded:
+            if not needle:
+                continue
+            if first == needle:
+                score = max(score, 100)
+            elif first.startswith(needle):
+                score = max(score, 80)
+            elif needle in full.split():
+                score = max(score, 70)
+            elif full.startswith(needle):
+                score = max(score, 60)
+            elif needle in full:
+                score = max(score, 40)
+        if score > 0:
+            scored.append((score, s))
+
+    scored.sort(key=lambda t: -t[0])
+    return [dict(s) for _, s in scored[:3]]
+
+
+def build_devices_catalog_for_prompt(devices: list) -> str:
+    """JSON compacto pero completo del catalogo para incluir en el system prompt."""
+    items = []
+    for d in devices:
+        items.append({
+            "id": d["id"],
+            "name": d["name"],
+            "ramp": d.get("ramp_name"),
+            "stage": d.get("stage"),
+            "description": d.get("description"),
+            "function_summary": d.get("function_summary"),
+            "observable_manifestations": d.get("observable_manifestations") or [],
+            "pedagogical_situations": d.get("pedagogical_situations") or [],
+            "material_class": d.get("material_class") or [],
+            "how_to_use": d.get("how_to_use"),
+            "recommendations": d.get("recommendations"),
+            "rationale": d.get("rationale"),
+            "classroom_benefit": d.get("classroom_benefit"),
+            "quantity": d.get("quantity"),
+        })
+    return json.dumps(items, ensure_ascii=False)
+
+
+def build_students_context_for_prompt(students: list) -> str:
+    """JSON con id, name, perfil minimo. Sin difundir 'free_description' literal."""
+    items = []
+    for s in students:
+        items.append({
+            "id": s["id"],
+            "name": s["name"],
+            "is_transitory": s.get("is_transitory"),
+            "difficulties": s.get("difficulties") or [],
+            "notes": s.get("free_description"),
+        })
+    return json.dumps(items, ensure_ascii=False)
+
+
+def execute_assist_tool(name: str, args: dict, ctx: dict) -> dict:
+    """Despachador de las 3 tools del asistente. Devuelve un dict serializable
+    que el modelo recibira como tool result."""
+    if name == "identify_student":
+        matches = find_student_match(args.get("query", ""), ctx["students"])
+        return {"matches": matches, "query": args.get("query", "")}
+
+    if name == "propose_device":
+        did = args.get("device_id")
+        device = next((dict(d) for d in ctx["devices"] if d["id"] == did), None)
+        if not device:
+            return {"ok": False, "error": f"device_id {did} no existe en el catalogo"}
+        # alternativas opcionales
+        alt_ids = args.get("alternatives") or []
+        alternatives = [dict(d) for d in ctx["devices"] if d["id"] in alt_ids]
+        return {
+            "ok": True,
+            "device": device,
+            "alternatives": alternatives,
+            "manifestation_observed": args.get("manifestation_observed"),
+            "rationale": args.get("rationale"),
+            "activity_context": args.get("activity_context"),
+            "student_id": args.get("student_id"),
+        }
+
+    if name == "propose_pedagogical_adaptation":
+        levels = args.get("levels") or []
+        # validacion minima: 3 niveles
+        return {
+            "ok": True,
+            "activity": args.get("activity"),
+            "subject": args.get("subject"),
+            "levels": levels,
+            "rationale": args.get("rationale"),
+        }
+
+    return {"ok": False, "error": f"tool desconocida: {name}"}
+
+
+@app.post("/inclusion/assist", response_model=InclusionAssistResponse)
+async def inclusion_assist(data: InclusionAssistRequest, course_id: int = Query(1)):
     with get_db() as conn:
         with conn.cursor() as cur:
-            # Fetch all devices
-            cur.execute("SELECT d.*, r.name as ramp_name FROM devices d JOIN ramps r ON d.ramp_id = r.id ORDER BY d.ramp_id, d.sort_order")
+            # Catalogo enriquecido (solo activos con stock para ranking interno;
+            # los otros tambien cuentan como existencia pero quedan fuera del prompt)
+            cur.execute("""
+                SELECT d.*, r.name as ramp_name
+                FROM devices d
+                JOIN ramps r ON d.ramp_id = r.id
+                WHERE COALESCE(d.active, TRUE) = TRUE
+                ORDER BY d.ramp_id, d.sort_order
+            """)
             devices = cur.fetchall()
 
-            devices_catalog = json.dumps([{
-                "id": d["id"], "name": d["name"], "ramp": d["ramp_name"],
-                "needs_description": d["needs_description"],
-            } for d in devices], ensure_ascii=False)
-
-            # Fetch students with profiles (course 1 for demo)
             cur.execute("""
                 SELECT s.id, s.name, sip.is_transitory, sip.difficulties, sip.free_description
                 FROM students s
                 LEFT JOIN student_inclusion_profiles sip ON s.id = sip.student_id
-                WHERE s.course_id = 1
+                WHERE s.course_id = %s
                 ORDER BY s.name
-            """)
+            """, (course_id,))
             students = cur.fetchall()
 
-            students_context = json.dumps([{
-                "id": s["id"], "name": s["name"],
-                "difficulties": s["difficulties"] or [],
-            } for s in students], ensure_ascii=False)
+            devices_catalog = build_devices_catalog_for_prompt(devices)
+            students_context = build_students_context_for_prompt(students)
 
             system_prompt = ASSIST_SYSTEM_PROMPT.format(
                 devices_catalog=devices_catalog,
-                students_context=students_context
+                students_context=students_context,
             )
-
             if data.history:
-                system_prompt += "\nYa hay conversacion previa. Responde de forma conversacional y breve. No repitas recomendaciones previas."
+                system_prompt += "\n\nYa hay conversacion previa. Responde de forma conversacional y breve. No repitas recomendaciones previas."
 
             messages = [{"role": "system", "content": system_prompt}]
-            # Keep only last 10 messages to avoid token overflow
             recent_history = data.history[-10:] if len(data.history) > 10 else data.history
             for msg in recent_history:
                 messages.append({"role": msg.role, "content": msg.content})
             messages.append({"role": "user", "content": data.message})
 
+            ctx = {"devices": devices, "students": students, "course_id": course_id}
+            tool_calls_audit: list = []
+            ai_response = ""
             try:
-                ai_response = ""
-                for attempt in range(3):
+                # Tool calling loop (max 5 iter para evitar runaway)
+                for iteration in range(5):
+                    response = ai_client.chat.completions.create(
+                        model=AZURE_OPENAI_DEPLOYMENT,
+                        messages=messages,
+                        tools=INCLUSION_ASSIST_TOOLS,
+                        tool_choice="auto",
+                        max_completion_tokens=2000,
+                    )
+                    choice = response.choices[0]
+                    msg = choice.message
+                    print(f"[assist] iter={iteration} finish={choice.finish_reason} tool_calls={len(msg.tool_calls or [])}")
+
+                    if msg.tool_calls:
+                        # Append assistant message con tool_calls
+                        messages.append({
+                            "role": "assistant",
+                            "content": msg.content or "",
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                                }
+                                for tc in msg.tool_calls
+                            ],
+                        })
+                        # Ejecutar cada tool y appendear resultado
+                        for tc in msg.tool_calls:
+                            try:
+                                args = json.loads(tc.function.arguments or "{}")
+                            except Exception:
+                                args = {}
+                            result = execute_assist_tool(tc.function.name, args, ctx)
+                            tool_calls_audit.append({
+                                "name": tc.function.name,
+                                "args": args,
+                                "result": result,
+                            })
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": json.dumps(result, ensure_ascii=False, default=str),
+                            })
+                        continue
+
+                    # No hay tool_calls -> respuesta final
+                    ai_response = msg.content or ""
+                    break
+
+                # Retry simple si quedo vacia tras el loop
+                retry = 0
+                while not ai_response.strip() and retry < 2:
+                    retry += 1
                     response = ai_client.chat.completions.create(
                         model=AZURE_OPENAI_DEPLOYMENT,
                         messages=messages,
                         max_completion_tokens=2000,
                     )
-                    choice = response.choices[0]
-                    ai_response = choice.message.content or ""
-                    finish_reason = choice.finish_reason
-                    # Log full debug info
-                    print(f"AI assist attempt {attempt+1}: finish_reason={finish_reason}, len={len(ai_response)}")
-                    print(f"AI assist response preview: {repr(ai_response[:200])}")
-                    print(f"AI assist full choice model_dump: {choice.model_dump()}")
-                    if ai_response.strip():
-                        break
-                    logger.warning(f"AI assist empty response (attempt {attempt+1}/3), retrying...")
+                    ai_response = response.choices[0].message.content or ""
 
                 if not ai_response.strip():
-                    return {
-                        "response": "No pude generar una respuesta. ¿Podes repetir la consulta?",
-                        "identified_student": None,
-                        "device": None,
-                    }
+                    return InclusionAssistResponse(
+                        response="No pude generar una respuesta. ¿Podes repetir la consulta?",
+                    )
 
-                # Extract student ID
-                student_id_match = re.search(r'\[STUDENT_ID:(\d+)\]', ai_response)
+                # Construir el response a partir del audit
                 identified_student = None
-                if student_id_match:
-                    sid = int(student_id_match.group(1))
-                    identified_student = next((s for s in students if s["id"] == sid), None)
-                    if identified_student:
-                        identified_student = dict(identified_student)
+                device = None
+                pedagogical_adaptation = None
 
-                # Extract device ID
-                device_id_match = re.search(r'\[DEVICE_ID:(\d+)\]', ai_response)
-                recommended_device = None
-                if device_id_match:
-                    did = int(device_id_match.group(1))
-                    recommended_device = next((d for d in devices if d["id"] == did), None)
-                    if recommended_device:
-                        recommended_device = dict(recommended_device)
+                for call in tool_calls_audit:
+                    if call["name"] == "identify_student":
+                        matches = (call.get("result") or {}).get("matches") or []
+                        if matches:
+                            identified_student = matches[0]
+                    elif call["name"] == "propose_device":
+                        result = call.get("result") or {}
+                        if result.get("ok") and result.get("device"):
+                            device = result["device"]
+                    elif call["name"] == "propose_pedagogical_adaptation":
+                        result = call.get("result") or {}
+                        if result.get("ok"):
+                            pedagogical_adaptation = PedagogicalAdaptation(
+                                activity=result.get("activity") or "",
+                                subject=result.get("subject"),
+                                levels=[PedagogicalAdaptationLevel(**lv) for lv in (result.get("levels") or []) if isinstance(lv, dict) and lv.get("label") and lv.get("task")],
+                                rationale=result.get("rationale") or "",
+                            )
 
-                # Clean tags from response
-                clean_response = re.sub(r'\[STUDENT_ID:\d+\]', '', ai_response)
-                clean_response = re.sub(r'\[DEVICE_ID:\d+\]', '', clean_response).strip()
+                return InclusionAssistResponse(
+                    response=ai_response.strip(),
+                    identified_student=identified_student,
+                    device=device,
+                    pedagogical_adaptation=pedagogical_adaptation,
+                    tool_calls=[AssistToolCall(**tc) for tc in tool_calls_audit],
+                )
 
-                return {
-                    "response": clean_response,
-                    "identified_student": identified_student,
-                    "device": recommended_device,
-                }
             except Exception as e:
-                logger.error(f"AI assist error: {e}")
+                logger.exception(f"AI assist error: {e}")
                 raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
